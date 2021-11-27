@@ -1,0 +1,9 @@
+vis dial dataset class 
+image hdf5 reader 
+iglu dataset corpus 
+
+visdial data json structure:- questions,answers,dialogues[image-idx,question-idx,answer-idx,answer-options,ground_truth-idx]
+img, boxes, single_class, single_score = self.hdf_reader[img_id] (2048-dim,36 (boxes,classes, scores)) (vis_pe a 7-dim vector formed using these)
+(architect,builder)-pair, next_utterance +[image vectors for all previous timesteps]
+
+since we are uploading in the same position, ignoring the position information vis_pe temporarily

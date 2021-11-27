@@ -222,8 +222,7 @@ class BertEmbeddings(nn.Module):
                 len_vis_input=49):
         seq_length = input_ids.size(1)
         if position_ids is None:
-            position_ids = torch.arange(
-                seq_length, dtype=torch.long, device=input_ids.device)
+            position_ids = torch.arange(seq_length, dtype=torch.long, device=input_ids.device)
             position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
         if token_type_ids is None:
             token_type_ids = torch.zeros_like(input_ids)
@@ -1029,21 +1028,6 @@ class BertForPreTrainingLossMask(PreTrainedBertModel):
         else:
             self.crit_mask_lm_smoothed = None
 
-        if 'nsp' in loss_type:
-            if self.float_nsp_label:
-                if self.rank_loss == 'softmax':
-                    self.ce_loss_fct = nn.KLDivLoss(reduction='batchmean')
-                else:
-                    self.crit_next_sent = nn.CrossEntropyLoss(ignore_index=-1, reduction='none')
-            else:
-                if adaptive_weight and neg_num > 1:
-                    weight = [2.0 / (1.0 + neg_num), 2 * neg_num / (1.0 + neg_num)]
-                    print("Setting adaptive weights for neg/pos=%.2f/%.2f" % (weight[0], weight[1]))
-                    weight = torch.tensor(weight, dtype=torch.float32).cuda()
-                    self.crit_next_sent = nn.CrossEntropyLoss(ignore_index=-1, weight=weight)
-
-                else:
-                    self.crit_next_sent = nn.CrossEntropyLoss(ignore_index=-1)
         self.logsoftmax = nn.LogSoftmax(dim=-1)
 
         if enable_butd:
@@ -1051,25 +1035,7 @@ class BertForPreTrainingLossMask(PreTrainedBertModel):
                 self.vis_embed = nn.Sequential(nn.Linear(2048, config.hidden_size),
                                                nn.ReLU(),
                                                nn.Dropout(config.hidden_dropout_prob))  # use to be 0.3
-                self.vis_pe_embed = nn.Sequential(nn.Linear(7, config.hidden_size),
-                                                  nn.ReLU(),
-                                                  nn.Dropout(config.hidden_dropout_prob))
-            elif visdial_v == "0.9" and len_vis_input == 100:
-                self.vis_embed = nn.Sequential(nn.Linear(2048, 2048),
-                                               nn.ReLU(),
-                                               nn.Linear(2048, config.hidden_size),
-                                               nn.ReLU(),
-                                               nn.Dropout(config.hidden_dropout_prob))  # use to be 0.3
-                try:
-                    self.vis_embed[0].weight.data.copy_(torch.from_numpy(pickle.load(
-                        open('detectron_weights/fc7_w.pkl', 'rb'))))
-                    self.vis_embed[0].bias.data.copy_(torch.from_numpy(pickle.load(
-                        open('detectron_weights/fc7_b.pkl', 'rb'))))
-                except:
-                    raise Exception(
-                        'Cannot find Detectron fc7 weights! Download from https://dl.fbaipublicfiles.com/ActivityNet-Entities/ActivityNet-Entities/detectron_weights.tar.gz and uncompress under the code root directory.')
-
-                self.vis_pe_embed = nn.Sequential(nn.Linear(6 + 1601, config.hidden_size),
+                self.vis_pe_embed = nn.Sequential(nn.Linear(2, config.hidden_size), #changing the position embedding to 2
                                                   nn.ReLU(),
                                                   nn.Dropout(config.hidden_dropout_prob))
 
@@ -1163,58 +1129,6 @@ class BertForPreTrainingLossMask(PreTrainedBertModel):
                 masked_lm_loss = loss_mask_and_normalize(
                     masked_lm_loss.float(), masked_weights, drop_worst_ratio)
             next_sentence_loss = masked_lm_loss.new(1).fill_(0)
-        elif self.loss_type == 'nsp':
-            prediction_scores, seq_relationship_score = self.cls(
-                sequence_output, pooled_output, task_idx=task_idx)
-            if self.float_nsp_label:
-                rel_scores = next_sentence_label.view(-1)
-                binary_label = rel_scores.ceil().long()
-                zero_tensor = seq_relationship_score.new(1).fill_(0)
-                if self.rank_loss:
-                    output = seq_relationship_score.view(-1, 30, 2)[:, :, -1]
-                    rs_score = rel_scores.view(-1, 30)
-                    if self.rank_loss == 'softmax':
-                        next_sentence_loss = self.ce_loss_fct(F.log_softmax(output, dim=1), F.softmax(rs_score, dim=1))
-                    elif self.rank_loss == 'listmle':
-                        next_sentence_loss = listMLE(output, rs_score)
-                    elif self.rank_loss == 'listnet':
-                        next_sentence_loss = listNet(output, rs_score)
-                    elif self.rank_loss == 'approxndcg':
-                        next_sentence_loss = approxNDCGLoss(output, rs_score)
-                    else:
-                        raise NotImplementedError
-                    return zero_tensor, zero_tensor, next_sentence_loss
-
-                if self.add_val:
-                    loss_weights = torch.where(rel_scores == 0, torch.ones_like(rel_scores), rel_scores * 1)
-                else:
-                    loss_weights = torch.where(rel_scores == 0, torch.ones_like(rel_scores), rel_scores * 2)
-                next_sentence_losses = self.crit_next_sent(
-                    seq_relationship_score.view(-1, self.num_labels).float(), binary_label)
-                next_sentence_loss = torch.mean(next_sentence_losses * loss_weights)
-            else:
-                next_sentence_loss = self.crit_next_sent(
-                    seq_relationship_score.view(-1, self.num_labels).float(), next_sentence_label.view(-1))
-            masked_lm_loss = next_sentence_loss.new(1).fill_(0)
-        elif self.loss_type == 'mlm_nsp':
-            if masked_pos.numel() == 0:
-                # hack to avoid empty masked_pos during training for now
-                masked_lm_loss = pooled_output.new(1).fill_(0)
-            else:
-                sequence_output_masked = gather_seq_out_by_pos(
-                    sequence_output, masked_pos)
-                prediction_scores_masked, seq_relationship_score = self.cls(
-                    sequence_output_masked, pooled_output, task_idx=task_idx)
-                if self.crit_mask_lm_smoothed:
-                    masked_lm_loss = self.crit_mask_lm_smoothed(
-                        F.log_softmax(prediction_scores_masked.float(), dim=-1), masked_lm_labels)
-                else:
-                    masked_lm_loss = self.crit_mask_lm(
-                        prediction_scores_masked.transpose(1, 2).float(), masked_lm_labels)
-                masked_lm_loss = loss_mask_and_normalize(
-                    masked_lm_loss.float(), masked_weights, drop_worst_ratio)
-            next_sentence_loss = self.crit_next_sent(
-                seq_relationship_score.view(-1, self.num_labels).float(), next_sentence_label.view(-1))
         else:
             raise NotImplementedError
 
@@ -1280,24 +1194,6 @@ class BertForVisDialGen(PreTrainedBertModel):
                                                nn.ReLU(),
                                                nn.Dropout(config.hidden_dropout_prob))  # use to be 0.3
                 self.vis_pe_embed = nn.Sequential(nn.Linear(7, config.hidden_size),
-                                                  nn.ReLU(),
-                                                  nn.Dropout(config.hidden_dropout_prob))
-            elif visdial_v == "0.9" and len_vis_input == 100:
-                self.vis_embed = nn.Sequential(nn.Linear(2048, 2048),
-                                               nn.ReLU(),
-                                               nn.Linear(2048, config.hidden_size),
-                                               nn.ReLU(),
-                                               nn.Dropout(config.hidden_dropout_prob))  # use to be 0.3
-                try:
-                    self.vis_embed[0].weight.data.copy_(torch.from_numpy(pickle.load(
-                        open('detectron_weights/fc7_w.pkl', 'rb'))))
-                    self.vis_embed[0].bias.data.copy_(torch.from_numpy(pickle.load(
-                        open('detectron_weights/fc7_b.pkl', 'rb'))))
-                except:
-                    raise Exception(
-                        'Cannot find Detectron fc7 weights! Download from https://dl.fbaipublicfiles.com/ActivityNet-Entities/ActivityNet-Entities/detectron_weights.tar.gz and uncompress under the code root directory.')
-
-                self.vis_pe_embed = nn.Sequential(nn.Linear(6 + 1601, config.hidden_size),
                                                   nn.ReLU(),
                                                   nn.Dropout(config.hidden_dropout_prob))
 
@@ -1871,166 +1767,3 @@ class BertForQuestionAnswering(PreTrainedBertModel):
         else:
             return start_logits, end_logits
 
-
-""" for VLP, based on UniLM Back up"""
-# class BertForPreTrainingLossMask(PreTrainedBertModel):
-#     """refer to BertForPreTraining"""
-#
-#     def __init__(self, config, num_labels=2, enable_butd=False, len_vis_input=49, tasks='img2txt'):
-#         super(BertForPreTrainingLossMask, self).__init__(config)
-#         self.bert = BertModel(config)
-#         self.cls = BertPreTrainingHeads(
-#             config, self.bert.embeddings.word_embeddings.weight, num_labels=num_labels) # num_labels not applicable for VLP
-#         self.apply(self.init_bert_weights)
-#         self.crit_mask_lm = nn.CrossEntropyLoss(reduction='none')
-#         self.num_labels = num_labels
-#         self.len_vis_input = len_vis_input
-#         self.enable_butd = enable_butd
-#         if hasattr(config, 'label_smoothing') and config.label_smoothing:
-#             self.crit_mask_lm_smoothed = LabelSmoothingLoss(
-#                 config.label_smoothing, config.vocab_size, ignore_index=0, reduction='none')
-#         else:
-#             self.crit_mask_lm_smoothed = None
-#
-#         # will not be initialized when loading BERT weights
-#         if enable_butd:
-#             self.vis_embed = nn.Sequential(nn.Linear(2048, 2048),
-#                                        nn.ReLU(),
-#                                        nn.Linear(2048, config.hidden_size),
-#                                        nn.ReLU(),
-#                                        nn.Dropout(config.hidden_dropout_prob)) # use to be 0.3
-#             try:
-#                 self.vis_embed[0].weight.data.copy_(torch.from_numpy(pickle.load(
-#                     open('detectron_weights/fc7_w.pkl', 'rb'))))
-#                 self.vis_embed[0].bias.data.copy_(torch.from_numpy(pickle.load(
-#                     open('detectron_weights/fc7_b.pkl', 'rb'))))
-#             except:
-#                 raise Exception('Cannot find Detectron fc7 weights! Download from https://dl.fbaipublicfiles.com/ActivityNet-Entities/ActivityNet-Entities/detectron_weights.tar.gz and uncompress under the code root directory.')
-#
-#             self.vis_pe_embed = nn.Sequential(nn.Linear(6+1601, config.hidden_size),
-#                                        nn.ReLU(),
-#                                        nn.Dropout(config.hidden_dropout_prob))
-#         else:
-#             self.vis_embed = nn.Sequential(nn.Linear(2048, config.hidden_size*2),
-#                                        nn.ReLU(),
-#                                        nn.Linear(config.hidden_size*2, config.hidden_size),
-#                                        nn.ReLU(),
-#                                        nn.Dropout(config.hidden_dropout_prob)) # use to be 0.3
-#         self.tasks = tasks
-#         if tasks == 'vqa2':
-#             self.ans_classifier = nn.Sequential(nn.Linear(config.hidden_size, config.hidden_size*2),
-#                                        nn.ReLU(),
-#                                        nn.Linear(config.hidden_size*2, 3129)) # 3129 hard coded...
-#             self.vqa2_crit = nn.BCEWithLogitsLoss()
-#
-#
-#     def forward(self, vis_feats, vis_pe, input_ids, token_type_ids=None, attention_mask=None, masked_lm_labels=None, ans_labels=None, next_sentence_label=None, masked_pos=None, masked_weights=None, task_idx=None, vis_masked_pos=[], mask_image_regions=False, drop_worst_ratio=0.2, vqa_inference=False):
-#
-#         vis_feats = self.vis_embed(vis_feats) # image region features
-#         vis_pe = self.vis_pe_embed(vis_pe) # image region positional encodings
-#
-#         # VQA inference
-#         if vqa_inference:
-#             assert(ans_labels == None)
-#             sequence_output, pooled_output = self.bert(vis_feats, vis_pe, input_ids, token_type_ids,
-#                 attention_mask, output_all_encoded_layers=False, len_vis_input=self.len_vis_input)
-#
-#             vqa2_embed = sequence_output[:, 0]*sequence_output[:, self.len_vis_input+1]
-#             vqa2_pred = self.ans_classifier(vqa2_embed)
-#             ans_idx = torch.max(vqa2_pred[:, 1:], -1)[1] + 1
-#             return ans_idx
-#
-#         # zero out vis_masked_pos
-#         if mask_image_regions:
-#             vis_feat_mask = vis_masked_pos.new(*vis_feats.size()[:2], 1).fill_(0).byte()
-#             for bb in range(vis_masked_pos.size(0)):
-#                 for pp in range(vis_masked_pos.size(1)):
-#                     vis_feat_mask[bb, vis_masked_pos[bb, pp]-1] = 1
-#             sequence_output, pooled_output = self.bert(vis_feats.masked_fill(vis_feat_mask, 0.),
-#                 vis_pe.masked_fill(vis_feat_mask, 0.), input_ids, token_type_ids,
-#                 attention_mask, output_all_encoded_layers=False, len_vis_input=self.len_vis_input)
-#         else:
-#             sequence_output, pooled_output = self.bert(vis_feats, vis_pe, input_ids, token_type_ids,
-#                 attention_mask, output_all_encoded_layers=False, len_vis_input=self.len_vis_input)
-#
-#         if masked_lm_labels is None or next_sentence_label is None:
-#             prediction_scores, seq_relationship_score = self.cls(
-#                 sequence_output, pooled_output, task_idx=task_idx)
-#             return prediction_scores, seq_relationship_score
-#
-#         def gather_seq_out_by_pos(seq, pos):
-#             return torch.gather(seq, 1, pos.unsqueeze(2).expand(-1, -1, seq.size(-1)))
-#
-#         def gather_seq_out_by_pos_average(seq, pos, mask):
-#             # pos/mask: (batch, num_pair, max_token_num)
-#             batch_size, max_token_num = pos.size(0), pos.size(-1)
-#             # (batch, num_pair, max_token_num, seq.size(-1))
-#             pos_vec = torch.gather(seq, 1, pos.view(batch_size, -1).unsqueeze(
-#                 2).expand(-1, -1, seq.size(-1))).view(batch_size, -1, max_token_num, seq.size(-1))
-#             # (batch, num_pair, seq.size(-1))
-#             mask = mask.type_as(pos_vec)
-#             pos_vec_masked_sum = (
-#                 pos_vec * mask.unsqueeze(3).expand_as(pos_vec)).sum(2)
-#             return pos_vec_masked_sum / mask.sum(2, keepdim=True).expand_as(pos_vec_masked_sum)
-#
-#         def loss_mask_and_normalize(loss, mask, drop_worst_ratio):
-#             mask = mask.type_as(loss)
-#             loss = loss * mask
-#
-#             # Ruotian Luo's drop worst
-#             keep_loss, keep_ind = torch.topk(loss.sum(-1), int(loss.size(0)*(1-drop_worst_ratio)), largest=False)
-#
-#             # denominator = torch.sum(mask) + 1e-5
-#             # return (loss / denominator).sum()
-#             denominator = torch.sum(mask.sum(-1)[keep_ind]) + 1e-5
-#             return (keep_loss / denominator).sum()
-#
-#         # masked lm
-#         if masked_pos.numel() == 0:
-#             # hack to avoid empty masked_pos during training for now
-#             masked_lm_loss = pooled_output.new(1).fill_(0)
-#         else:
-#             sequence_output_masked = gather_seq_out_by_pos(
-#                 sequence_output, masked_pos)
-#             prediction_scores_masked, seq_relationship_score = self.cls(
-#                 sequence_output_masked, pooled_output, task_idx=task_idx)
-#             if self.crit_mask_lm_smoothed:
-#                 masked_lm_loss = self.crit_mask_lm_smoothed(
-#                     F.log_softmax(prediction_scores_masked.float(), dim=-1), masked_lm_labels)
-#             else:
-#                 masked_lm_loss = self.crit_mask_lm(
-#                     prediction_scores_masked.transpose(1, 2).float(), masked_lm_labels)
-#             masked_lm_loss = loss_mask_and_normalize(
-#                 masked_lm_loss.float(), masked_weights, drop_worst_ratio)
-#
-#         if mask_image_regions:
-#             # Selfie-like pretext
-#             masked_vis_feats = torch.gather(vis_feats, 1,
-#                 (vis_masked_pos-1).unsqueeze(-1).expand((-1, -1, vis_feats.size(-1))))
-#
-#             if self.enable_butd:
-#                 masked_pos_enc = torch.gather(vis_pe, 1,
-#                 (vis_masked_pos-1).unsqueeze(-1).expand((-1, -1, vis_pe.size(-1))))
-#             else:
-#                 masked_pos_enc = self.bert.embeddings.position_embeddings(vis_masked_pos)
-#
-#             masked_pos_enc += pooled_output.unsqueeze(1).expand_as(masked_pos_enc)
-#             assert(masked_vis_feats.size() == masked_pos_enc.size())
-#             sim_mat = torch.matmul(masked_pos_enc, masked_vis_feats.permute(0, 2, 1).contiguous())
-#             sim_mat = F.log_softmax(sim_mat, dim=-1)
-#             vis_pretext_loss = []
-#             for i in range(sim_mat.size(0)):
-#                 vis_pretext_loss.append(sim_mat[i].diag().mean().view(1)*-1.) # cross entropy for ones
-#             vis_pretext_loss = torch.cat(vis_pretext_loss).mean()
-#         else:
-#             vis_pretext_loss = masked_lm_loss.new(1).fill_(0)
-#
-#         if self.tasks == 'vqa2':
-#             assert(ans_labels is not None)
-#             # vqa2_embed = pooled_output
-#             vqa2_embed = sequence_output[:, 0]*sequence_output[:, self.len_vis_input+1]
-#             vqa2_pred = self.ans_classifier(vqa2_embed)
-#             vqa2_loss = self.vqa2_crit(vqa2_pred, ans_labels) * ans_labels.size(1) # should not avg over answer dimension
-#             return masked_lm_loss.new(1).fill_(0), vis_pretext_loss, vqa2_loss # works better when combined with max_pred=1
-#         else:
-#             return masked_lm_loss, vis_pretext_loss, masked_lm_loss.new(1).fill_(0)

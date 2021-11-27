@@ -7,12 +7,9 @@ from __future__ import print_function
 import os
 import sys
 import logging
-import glob
-import math
 import json
 import argparse
 from tqdm import tqdm, trange
-from pathlib import Path
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, RandomSampler
@@ -25,43 +22,29 @@ from pytorch_pretrained_bert.tokenization import BertTokenizer, WhitespaceTokeni
 from pytorch_pretrained_bert.modeling import BertForPreTrainingLossMask
 from pytorch_pretrained_bert.optimization import BertAdam, warmup_linear
 
-from vdbert.loader_utils import batch_list_to_batch_tensors_rank_loss
-from vdbert.seq2seq_loader import VisdialDatasetRelRankLoss, Preprocess4TrainVisdialRankLoss
-from vdbert.data_parallel import DataParallelImbalance
-
-
-def _get_max_epoch_model(output_dir):
-    fn_model_list = glob.glob(os.path.join(output_dir, "model.*.bin"))
-    fn_optim_list = glob.glob(os.path.join(output_dir, "optim.*.bin"))
-    if (not fn_model_list) or (not fn_optim_list):
-        return None
-    both_set = set([int(Path(fn).stem.split('.')[-1]) for fn in fn_model_list]
-                   ) & set([int(Path(fn).stem.split('.')[-1]) for fn in fn_optim_list])
-    if both_set:
-        return max(both_set)
-    else:
-        return None
-
+from loader_utils import batch_list_to_batch_tensors
+from seq2seq_loader import Preprocess4TrainVisdial, VisdialDataset
 
 def process_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--train_src_file", type=str, help="The input data file name.")
-    parser.add_argument("--val_src_file", type=str, help="The input data file name.")
-    parser.add_argument("--train_rel_file", type=str, help="The input data file name.")
-    parser.add_argument("--val_rel_file", type=str, help="The input data file name.")
-    parser.add_argument("--float_nsp_label", type=int, help="")
+    parser.add_argument("--src_file", type=str, help="The input data file name.")
     parser.add_argument("--neg_num", default=0, type=int)
-    parser.add_argument("--rank_loss", default='', choices=['softmax', 'listmle', 'listnet', 'approxndcg'], type=str)
-    parser.add_argument("--add_val", default=0, type=int)
-    parser.add_argument("--train_visdial_disc_with_relevance.py", default=0, type=int)
+    parser.add_argument("--only_qa", default=0, type=int)
+    parser.add_argument("--no_h0", default=0, type=int)
+    parser.add_argument("--no_vision", default=0, type=int)
+    parser.add_argument("--sub_sample", default=0, type=int)
+    parser.add_argument("--adaptive_weight", default=0, type=int)
     parser.add_argument("--multiple_neg", default=0, type=int)
     parser.add_argument("--inc_gt_rel", default=0, type=int)
     parser.add_argument("--inc_full_hist", default=0, type=int)
+    parser.add_argument("--just_for_pretrain", default=0, type=int)
+    parser.add_argument("--add_boundary", default=0, type=int)
+    parser.add_argument("--add_attn_fuse", default=0, type=int)
     parser.add_argument("--pad_hist", default=0, type=int)
     parser.add_argument("--only_mask_ans", default=0, type=int)
-    parser.add_argument("--visdial_v", default='1.0', choices=['1.0', '0.9'], type=str)
-    parser.add_argument("--loss_type", default='mlm', choices=['mlm', 'nsp', 'mlm_nsp'], type=str)
+    parser.add_argument("--visdial_v", default='1.0', choices=['1.0'], type=str)
+    parser.add_argument("--loss_type", default='mlm', choices=['mlm'], type=str)
     parser.add_argument("--image_features_hdfpath", default='/export/home/vlp_data/visdial/img_feats1.0/train.h5',
                         type=str)
 
@@ -70,9 +53,6 @@ def process_args():
     parser.add_argument('--max_len_hist_ques', type=int, default=40)
 
     parser.add_argument("--finetune", default=0, type=int)
-    # parser.add_argument("--mask_all_ans", default=0, type=int)
-    # parser.add_argument("--include_mask_lm", default=0, type=int)
-    # parser.add_argument("--single_label", default=0, type=int)
     parser.add_argument('--tasks', default='img2txt',
                         help='img2txt | vqa2| ctrl2 | visdial | visdial_short_hist | visdial_nsp')
 
@@ -159,10 +139,6 @@ def process_args():
                         help="Use new segment ids for bi-uni-directional LM.")
     parser.add_argument('--tokenized_input', action='store_true',
                         help="Whether the input is tokenized.")
-    # parser.add_argument('--max_len_a', type=int, default=0,
-    #                     help="Truncate_config: maximum length of segment A. 0 means none.")
-    # parser.add_argument('--max_b_len', type=int, default=20,
-    #                     help="Truncate_config: maximum length of segment B.")
     parser.add_argument('--trunc_seg', default='b',
                         help="Truncate_config: first truncate segment A/B (option: a, b).")
     parser.add_argument('--always_truncate_tail', action='store_true',
@@ -230,7 +206,13 @@ def main():
     elif args.loss_type == 'nsp':
         assert int(args.bi_prob) == 1 and args.max_pred == 0 and args.neg_num > 0
 
-    print('global_rank: {}, local rank: {}'.format(args.global_rank, args.local_rank))
+    if args.adaptive_weight == 1:
+        assert args.neg_num > 1
+    if args.add_boundary == 1:
+        assert args.inc_full_hist
+
+    if args.world_size > 1:
+        print('global_rank: {}, local rank: {}'.format(args.global_rank, args.local_rank))
 
     # Input format: [CLS] img [SEP] hist [SEP_0] ques [SEP_1] ans [SEP]
     args.max_seq_length = args.len_vis_input + 2 + args.max_len_hist_ques + 2 + args.max_len_ans + 1
@@ -243,13 +225,13 @@ def main():
 
     if args.enable_butd:
         if args.visdial_v == '1.0':
-            assert (args.len_vis_input == 36)
+            assert (args.len_vis_input == 36) or (args.len_vis_input == 0)
         elif args.visdial_v == '0.9':
-            assert (args.len_vis_input == 100)
-            args.region_bbox_file = os.path.join(args.image_root, args.region_bbox_file)
-            args.region_det_file_prefix = os.path.join(args.image_root,
-                                                       args.region_det_file_prefix) if args.dataset in (
-                'cc', 'coco') and args.region_det_file_prefix != '' else ''
+            if (args.len_vis_input == 100):
+                args.region_bbox_file = os.path.join(args.image_root, args.region_bbox_file)
+                args.region_det_file_prefix = os.path.join(args.image_root,
+                                                           args.region_det_file_prefix) if args.dataset in (
+                    'cc', 'coco') and args.region_det_file_prefix != '' else ''
 
     # output config
     os.makedirs(args.output_dir, exist_ok=True)
@@ -263,12 +245,10 @@ def main():
         datefmt='%m/%d/%Y %H:%M:%S',
         level=logging.INFO)
     logger = logging.getLogger(__name__)
-    stdout = True
-    if stdout:
-        ch = logging.StreamHandler(sys.stdout)
-        ch.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(name)s -   %(message)s'))
-        ch.setLevel(logging.INFO)
-        logger.addHandler(ch)
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(name)s -   %(message)s'))
+    ch.setLevel(logging.INFO)
+    logger.addHandler(ch)
 
     if args.local_rank == -1 or args.no_cuda:
         device = torch.device(
@@ -279,8 +259,7 @@ def main():
         device = torch.device("cuda", args.local_rank)
         n_gpu = 1
         # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
-        torch.distributed.init_process_group(backend='nccl', init_method=args.dist_url,
-                                             world_size=args.world_size, rank=args.global_rank)
+    logger.info('Arguments: %s\n' % (' '.join(sys.argv[:])))
     logger.info("device: {} n_gpu: {}, distributed training: {}, 16-bits training: {}".format(
         device, n_gpu, bool(args.local_rank != -1), args.fp16))
 
@@ -311,7 +290,8 @@ def main():
         tokenizer.max_len = args.max_position_embeddings
     data_tokenizer = WhitespaceTokenizer() if args.tokenized_input else tokenizer
     assert args.do_train
-    bi_uni_pipeline = [Preprocess4TrainVisdialRankLoss(args.max_pred, args.mask_prob,
+    logger.info('Max seq length: %d, batch size: %d\n' % (args.max_seq_length, args.train_batch_size))
+    s2s_data = Preprocess4TrainVisdial(args.max_pred, args.mask_prob,
                                                list(tokenizer.vocab.keys()),
                                                tokenizer.convert_tokens_to_ids, args.max_seq_length,
                                                new_segment_ids=args.new_segment_ids,
@@ -326,29 +306,13 @@ def main():
                                                visdial_v=args.visdial_v, pad_hist=args.pad_hist,
                                                finetune=args.finetune,
                                                only_mask_ans=args.only_mask_ans,
-                                               float_nsp_label=args.float_nsp_label),
-                       Preprocess4TrainVisdialRankLoss(args.max_pred, args.mask_prob,
-                                               list(tokenizer.vocab.keys()),
-                                               tokenizer.convert_tokens_to_ids, args.max_seq_length,
-                                               new_segment_ids=args.new_segment_ids,
-                                               truncate_config={'len_vis_input': args.len_vis_input,
-                                                                'max_len_hist_ques': args.max_len_hist_ques,
-                                                                'max_len_ans': args.max_len_ans},
-                                               mask_image_regions=args.mask_image_regions,
-                                               mode="bi", vis_mask_prob=args.vis_mask_prob,
-                                               region_bbox_file=args.region_bbox_file,
-                                               region_det_file_prefix=args.region_det_file_prefix,
-                                               image_features_hdfpath=args.image_features_hdfpath,
-                                               visdial_v=args.visdial_v, pad_hist=args.pad_hist,
-                                               finetune=args.finetune,
-                                               only_mask_ans=args.only_mask_ans,
-                                               float_nsp_label=args.float_nsp_label)]
+                                               add_boundary=args.add_boundary,
+                                               only_qa=args.only_qa)
 
-    train_dataset = VisdialDatasetRelRankLoss(
-        args.train_src_file, args.val_src_file, args.train_rel_file, args.val_rel_file, args.train_batch_size, data_tokenizer,
-        use_num_imgs=args.use_num_imgs,
-        bi_uni_pipeline=bi_uni_pipeline, s2s_prob=args.s2s_prob, bi_prob=args.bi_prob,
-        is_train=args.do_train, neg_num=args.neg_num, inc_gt_rel=args.inc_gt_rel, inc_full_hist=args.inc_full_hist)
+    train_dataset = VisdialDataset(
+        args.src_file, args.train_batch_size, data_tokenizer, use_num_imgs=args.use_num_imgs,
+        s2s_data=s2s_data, is_train=args.do_train, neg_num=args.neg_num, inc_gt_rel=args.inc_gt_rel,
+        inc_full_hist=args.inc_full_hist, just_for_pretrain=args.just_for_pretrain, sub_sample=args.sub_sample)
 
     if args.world_size == 1:
         train_sampler = RandomSampler(train_dataset, replacement=False)
@@ -358,7 +322,7 @@ def main():
     train_dataloader = torch.utils.data.DataLoader(train_dataset,
                                                    batch_size=args.train_batch_size, sampler=train_sampler,
                                                    num_workers=args.num_workers,
-                                                   collate_fn=batch_list_to_batch_tensors_rank_loss, pin_memory=True)
+                                                   collate_fn=batch_list_to_batch_tensors, pin_memory=True)
 
     # note: args.train_batch_size has been changed to (/= args.gradient_accumulation_steps)
     t_total = int(len(train_dataloader) * args.num_train_epochs * 1. /
@@ -371,7 +335,6 @@ def main():
         logger.info("enable fp16 with amp")
 
     # Prepare model
-    recover_step = _get_max_epoch_model(args.output_dir)
     cls_num_labels = 2
     type_vocab_size = 6 if args.new_segment_ids else 2
     relax_projection = 4 if args.relax_projection else 0
@@ -379,7 +342,7 @@ def main():
     mask_word_id, eos_word_ids, pad_word_ids = tokenizer.convert_tokens_to_ids(
         ["[MASK]", "[SEP]", "[PAD]"])  # index in BERT vocab: 103, 102, 0
 
-    if (recover_step is None) and (args.model_recover_path is None):
+    if (args.model_recover_path is None):
         # if _state_dict == {}, the parameters are randomly initialized
         # if _state_dict == None, the parameters are initialized with bert-init
         assert args.scst == False, 'must init from maximum likelihood training'
@@ -393,17 +356,11 @@ def main():
             cache_dir=args.output_dir + '/.pretrained_model_{}'.format(args.global_rank),
             drop_prob=args.drop_prob, enable_butd=args.enable_butd,
             len_vis_input=args.len_vis_input, visdial_v=args.visdial_v, loss_type=args.loss_type,
-            float_nsp_label=args.float_nsp_label, rank_loss=args.rank_loss)
+            neg_num=args.neg_num, adaptive_weight=args.adaptive_weight, add_attn_fuse=args.add_attn_fuse,
+            no_h0=args.no_h0, no_vision=args.no_vision)
         global_step = 0
     else:
-        if recover_step:
-            logger.info("***** Recover model: %d *****", recover_step)
-            model_recover = torch.load(os.path.join(
-                args.output_dir, "model.{0}.bin".format(recover_step)))
-            # recover_step == number of epochs
-            global_step = math.floor(
-                recover_step * t_total * 1. / args.num_train_epochs)
-        elif args.model_recover_path:
+        if args.model_recover_path:
             logger.info("***** Recover model: %s *****",
                         args.model_recover_path)
             model_recover = torch.load(args.model_recover_path)
@@ -418,7 +375,8 @@ def main():
             cache_dir=args.output_dir + '/.pretrained_model_{}'.format(args.global_rank),
             drop_prob=args.drop_prob, enable_butd=args.enable_butd,
             len_vis_input=args.len_vis_input, visdial_v=args.visdial_v, loss_type=args.loss_type,
-            float_nsp_label=args.float_nsp_label, rank_loss=args.rank_loss)
+            neg_num=args.neg_num, adaptive_weight=args.adaptive_weight, add_attn_fuse=args.add_attn_fuse,
+            no_h0=args.no_h0, no_vision=args.no_vision)
 
         del model_recover
         torch.cuda.empty_cache()
@@ -431,20 +389,14 @@ def main():
             model.bert.embeddings.position_embeddings.float()
             model.bert.embeddings.token_type_embeddings.float()
     model.to(device)
-    # cnn.to(device)
     if args.local_rank != -1:
         try:
-            # from apex.parallel import DistributedDataParallel as DDP
             from torch.nn.parallel import DistributedDataParallel as DDP
         except ImportError:
             raise ImportError(
                 "Please install apex from https://www.github.com/nvidia/apex to use distributed and fp16 training.")
         model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True)
-        # cnn = DDP(cnn)
-    elif n_gpu > 1:
-        # model = torch.nn.DataParallel(model)
-        model = DataParallelImbalance(model)
-        # cnn = DataParallelImbalance(cnn)
+
 
     # Prepare optimizer
     param_optimizer = list(model.named_parameters())
@@ -481,16 +433,6 @@ def main():
                              schedule=args.sche_mode,
                              t_total=t_total)
 
-    if recover_step:
-        logger.info("***** Recover optimizer: %d *****", recover_step)
-        optim_recover = torch.load(os.path.join(
-            args.output_dir, "optim.{0}.bin".format(recover_step)))
-        if hasattr(optim_recover, 'state_dict'):
-            optim_recover = optim_recover.state_dict()
-        optimizer.load_state_dict(optim_recover)
-        if args.loss_scale == 0:
-            logger.info("***** Recover optimizer: dynamic_loss_scale *****")
-            optimizer.dynamic_loss_scale = True
 
     logger.info("***** CUDA.empty_cache() *****")
     torch.cuda.empty_cache()
@@ -502,21 +444,17 @@ def main():
         logger.info("  Loader length = %d", len(train_dataloader))
 
         model.train()
-        if recover_step:
-            start_epoch = recover_step + 1
-        else:
-            start_epoch = 1
+
+        start_epoch = 1
         logger.info("Begin training from epoch = %d", start_epoch)
         t0 = time.time()
         for i_epoch in trange(start_epoch, args.num_train_epochs + 1, desc="Epoch"):
-            if args.multiple_neg and i_epoch != 1:
-                train_dataset = VisdialDatasetRelRankLoss(
-                    args.train_src_file, args.val_src_file, args.train_rel_file, args.val_rel_file,
-                    args.train_batch_size, data_tokenizer,
-                    use_num_imgs=args.use_num_imgs,
+            if args.multiple_neg and i_epoch > 1:
+                train_dataset = VisdialDataset(
+                    args.src_file, args.train_batch_size, data_tokenizer, use_num_imgs=args.use_num_imgs,
                     bi_uni_pipeline=bi_uni_pipeline, s2s_prob=args.s2s_prob, bi_prob=args.bi_prob,
                     is_train=args.do_train, neg_num=args.neg_num, inc_gt_rel=args.inc_gt_rel,
-                    inc_full_hist=args.inc_full_hist, add_val=args.add_val)
+                    inc_full_hist=args.inc_full_hist, just_for_pretrain=args.just_for_pretrain, sub_sample=args.sub_sample)
 
                 if args.world_size == 1:
                     train_sampler = RandomSampler(train_dataset, replacement=False)
@@ -526,7 +464,7 @@ def main():
                 train_dataloader = torch.utils.data.DataLoader(train_dataset,
                                                                batch_size=args.train_batch_size, sampler=train_sampler,
                                                                num_workers=args.num_workers,
-                                                               collate_fn=batch_list_to_batch_tensors_rank_loss, pin_memory=True)
+                                                               collate_fn=batch_list_to_batch_tensors, pin_memory=True)
             if args.local_rank >= 0:
                 train_sampler.set_epoch(i_epoch - 1)
             iter_bar = tqdm(train_dataloader, desc='Iter (loss=X.XXX)')
@@ -535,7 +473,6 @@ def main():
             pretext_loss = []
             mlm_losses = []
             nsp_losses = []
-            zero_batch_cnt = 0
             for step, batch in enumerate(iter_bar):
                 batch = [t.to(device) for t in batch]
                 input_ids, segment_ids, input_mask, lm_label_ids, masked_pos, masked_weights, is_next, \
@@ -562,9 +499,6 @@ def main():
                     pretext_loss_deprecated = pretext_loss_deprecated.mean()
                     nsp_loss = nsp_loss.mean()
                 loss = masked_lm_loss + pretext_loss_deprecated + nsp_loss
-                # if loss.item() == 0:
-                #     zero_batch_cnt += 1
-                #     continue
 
                 # logging for each step (i.e., before normalization by args.gradient_accumulation_steps)
                 iter_bar.set_description('Iter (loss=%5.3f)' % loss.item())
@@ -575,7 +509,7 @@ def main():
 
                 if step % max(1, nbatches // 10) == 0:
                     logger.info(
-                        "Epoch {}, Iter {}, Loss {:.2f}, MLM {:.2f}, NSP {:.2f}, Elapse time {:.2f}\n".format(
+                        "Epoch {}, Iter {}, Loss {:.4f}, MLM {:.4f}, NSP {:.4f}, Elapse time {:.2f}\n".format(
                             i_epoch, step, np.mean(losses), np.mean(mlm_losses), np.mean(nsp_losses), time.time() - t0))
 
                 if args.enable_visdom:
@@ -624,7 +558,6 @@ def main():
                     optimizer.zero_grad()
                     global_step += 1
 
-            print("\nFinish one epoch, %d/%d is zero loss batch" % (zero_batch_cnt, nbatches))
             # Save a trained model
             logger.info(
                 "** ** * Saving fine-tuned model and optimizer ** ** * ")
@@ -632,12 +565,9 @@ def main():
                 model, 'module') else model  # Only save the model it-self
             output_model_file = os.path.join(
                 args.output_dir, "model.%d.%.3f.bin" % (i_epoch, np.mean(losses)))
-            output_optim_file = os.path.join(
-                args.output_dir, "optim.{0}.bin".format(i_epoch))
             if args.global_rank in (-1, 0):  # save model if the first device or no dist
                 torch.save(copy.deepcopy(model_to_save).cpu().state_dict(), output_model_file)
                 logger.info("Save model to %s", output_model_file)
-                # torch.save(optimizer.state_dict(), output_optim_file) # disable for now, need to sanitize state and ship everthing back to cpu
             logger.info("Finish training epoch %d, avg loss: %.2f and takes %.2f seconds" % (
                 i_epoch, np.mean(losses), time.time() - t0))
             logger.info("***** CUDA.empty_cache() *****")

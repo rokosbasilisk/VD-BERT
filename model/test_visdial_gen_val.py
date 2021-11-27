@@ -19,9 +19,9 @@ import sys
 from pytorch_pretrained_bert.tokenization import BertTokenizer
 from pytorch_pretrained_bert.modeling import BertForVisDialGen
 
-from vdbert.seq2seq_loader import Preprocess4TestVisdialGen
+from seq2seq_loader import Preprocess4TestVisdialGen
 
-from vdbert.metrics import scores_to_ranks, SparseGTMetrics, NDCG
+from metrics import scores_to_ranks, SparseGTMetrics, NDCG
 import time
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
