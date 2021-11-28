@@ -23,12 +23,12 @@ from pytorch_pretrained_bert.modeling import BertForPreTrainingLossMask
 from pytorch_pretrained_bert.optimization import BertAdam, warmup_linear
 
 from loader_utils import batch_list_to_batch_tensors
-from seq2seq_loader import Preprocess4TrainVisdial, VisdialDataset
+from seq2seq_loader_iglu import Preprocess4IGLU, IGLUDataset
 
 def process_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--src_file", type=str, help="The input data file name.")
+    parser.add_argument("--data_path", type=str, help="The input data file name.")
     parser.add_argument("--neg_num", default=0, type=int)
     parser.add_argument("--only_qa", default=0, type=int)
     parser.add_argument("--no_h0", default=0, type=int)
@@ -45,8 +45,6 @@ def process_args():
     parser.add_argument("--only_mask_ans", default=0, type=int)
     parser.add_argument("--visdial_v", default='1.0', choices=['1.0'], type=str)
     parser.add_argument("--loss_type", default='mlm', choices=['mlm'], type=str)
-    parser.add_argument("--image_features_hdfpath", default='/export/home/vlp_data/visdial/img_feats1.0/train.h5',
-                        type=str)
 
     parser.add_argument('--len_vis_input', type=int, default=36)
     parser.add_argument('--max_len_ans', type=int, default=10)
@@ -291,7 +289,7 @@ def main():
     data_tokenizer = WhitespaceTokenizer() if args.tokenized_input else tokenizer
     assert args.do_train
     logger.info('Max seq length: %d, batch size: %d\n' % (args.max_seq_length, args.train_batch_size))
-    s2s_data = Preprocess4TrainVisdial(args.max_pred, args.mask_prob,
+    s2s_data = Preprocess4IGLU(args.max_pred, args.mask_prob,
                                                list(tokenizer.vocab.keys()),
                                                tokenizer.convert_tokens_to_ids, args.max_seq_length,
                                                new_segment_ids=args.new_segment_ids,
@@ -302,17 +300,12 @@ def main():
                                                mode="s2s", vis_mask_prob=args.vis_mask_prob,
                                                region_bbox_file=args.region_bbox_file,
                                                region_det_file_prefix=args.region_det_file_prefix,
-                                               image_features_hdfpath=args.image_features_hdfpath,
-                                               visdial_v=args.visdial_v, pad_hist=args.pad_hist,
+                                               pad_hist=args.pad_hist,
                                                finetune=args.finetune,
                                                only_mask_ans=args.only_mask_ans,
-                                               add_boundary=args.add_boundary,
-                                               only_qa=args.only_qa)
+                                               add_boundary=args.add_boundary)
 
-    train_dataset = VisdialDataset(
-        args.src_file, args.train_batch_size, data_tokenizer, use_num_imgs=args.use_num_imgs,
-        s2s_data=s2s_data, is_train=args.do_train, neg_num=args.neg_num, inc_gt_rel=args.inc_gt_rel,
-        inc_full_hist=args.inc_full_hist, just_for_pretrain=args.just_for_pretrain, sub_sample=args.sub_sample)
+    train_dataset = IGLUDataset(args.train_batch_size, data_tokenizer, args.data_path)
 
     if args.world_size == 1:
         train_sampler = RandomSampler(train_dataset, replacement=False)

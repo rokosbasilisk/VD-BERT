@@ -6,6 +6,7 @@ import torch
 import torch.utils.data
 import torch.nn.functional as F
 from loader_utils import get_random_word, batch_list_to_batch_tensors, Pipeline
+from grid_utils import get_3d_repr
 
 import numpy as np
 import h5py
@@ -13,7 +14,6 @@ from tqdm import tqdm
 import pickle
 from typing import List
 import copy
-from 3d_utils import get_3d_repr
 
 class IGLUDataset(torch.utils.data.Dataset):
     """ Load image-sentence pairs """
@@ -80,7 +80,6 @@ class Preprocess4IGLU(Pipeline):
         self.max_len_hist_ques = truncate_config.get('max_len_hist_ques', None)
         self.max_len_ans = truncate_config.get('max_len_ans', None)
         self.mask_image_regions = mask_image_regions
-        self.visdial_v = visdial_v
         self.pad_hist = pad_hist
         self.finetune = finetune
         self.only_mask_ans = only_mask_ans
