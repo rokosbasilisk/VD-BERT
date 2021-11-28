@@ -143,13 +143,13 @@ class VisdialDataset(torch.utils.data.Dataset):
                     cap_tokens = tokenizer.tokenize(dialog['caption'])
                     ques_id = [item['question'] for item in dialog['dialog']]
                     ans_id = [item['answer'] for item in dialog['dialog']]
-                    ans_opts = [item['answer_options'] for item in dialog['dialog']]
-                    gt_id = [item['gt_index'] for item in dialog['dialog']]
+                    #ans_opts = [item['answer_options'] for item in dialog['dialog']]
+                    #gt_id = [item['gt_index'] for item in dialog['dialog']]
                     ques_tokens = [tokenizer.tokenize(questions[id] + '?') for id in ques_id]
                     ans_tokens = [tokenizer.tokenize(answers[id]) for id in ans_id]
-                    if neg_num != 0:
-                        neg_ans_tokens = [[tokenizer.tokenize(answers[ans_opts[turn_i][neg_sample(id)]])
-                                           for _ in range(neg_num)] for turn_i, id in enumerate(gt_id)]
+                    #if neg_num != 0:
+                    #    neg_ans_tokens = [[tokenizer.tokenize(answers[ans_opts[turn_i][neg_sample(id)]])
+                    #                       for _ in range(neg_num)] for turn_i, id in enumerate(gt_id)]
                     assert len(ques_tokens) == len(ans_tokens) == 10
 
                     if sub_sample:
@@ -166,7 +166,7 @@ class VisdialDataset(torch.utils.data.Dataset):
                             # prev_turn = ques_tokens[turn_i - 1] + ans_tokens[turn_i - 1]
                             # hist_tokens += ['[SEP_0]'] + prev_turn[:max_turn_len]  # new boundary
                             # hist_tokens += ['[SEP_0]'] + ques_tokens[turn_i - 1][:max_ques_len] \
-                            #                 + ['[SEP_1]'] + ans_tokens[turn_i - 1][:max_ans_len]   # old add boudary
+                            #                 + ['[SEP_1]'] + ans_tokens[turn_i - 1][:max_ans_len]   # old add boundary
                         else:
                             hist_tokens = ques_tokens[turn_i - 1] + ans_tokens[turn_i - 1]
 
@@ -194,16 +194,12 @@ class VisdialDataset(torch.utils.data.Dataset):
                                             self.ex_list.append(
                                                 (img_pth, (cur_hist, ques_tokens[turn_i], neg_ans_tokens[turn_i][idx], 0.0)))
                                     break
+
+                            #THIS:->
                             else:
                                 item_len.append(cur_len)
                                 self.ex_list.append(
                                     (img_pth, (cur_hist, ques_tokens[turn_i], ans_tokens[turn_i], 1.0)))
-                                if neg_num != 0:
-                                    for idx in range(neg_num):
-                                        self.ex_list.append(
-                                            (
-                                            img_pth, (cur_hist, ques_tokens[turn_i], neg_ans_tokens[turn_i][idx], 0.0)))
-
                     counter += 1
             print("\nVisdial Img Num: %d with %d examples, Avg len: %.2f, Max len: %d, Min len: %d" %
                   (counter, len(self.ex_list), np.mean(item_len), max(item_len), min(item_len)))
@@ -295,7 +291,7 @@ class Preprocess4TrainVisdial(Pipeline):
         self.vis_mask_prob = vis_mask_prob
 
     def __call__(self, instance):
-        img_path, visdial_example = instance
+        img_path, visdial_example = instance # (img_path, (cur_hist,ques_tokens,ans_tokens))
         tokens_a = ['[UNK]'] * self.len_vis_input
 
         def pad_to_length(tokens, length):
@@ -455,8 +451,8 @@ class Preprocess4TrainVisdial(Pipeline):
             "[masked] id: %d, pos: %d, weights: %d" % (len(masked_ids), len(masked_pos), len(masked_weights))
 
         return input_ids, masked_ids, masked_pos, masked_weights
-    # modify this 
-
+    
+    #TODO: modify get_butd function for image_feature and positional encoding
     def get_butd(self, img_id):
 
         if self.len_vis_input == 36:
