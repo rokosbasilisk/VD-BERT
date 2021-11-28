@@ -46,7 +46,7 @@ def process_args():
     parser.add_argument("--visdial_v", default='1.0', choices=['1.0'], type=str)
     parser.add_argument("--loss_type", default='mlm', choices=['mlm'], type=str)
 
-    parser.add_argument('--len_vis_input', type=int, default=36)
+    parser.add_argument('--len_vis_input', type=int, default=18)
     parser.add_argument('--max_len_ans', type=int, default=10)
     parser.add_argument('--max_len_hist_ques', type=int, default=40)
 
@@ -223,7 +223,7 @@ def main():
 
     if args.enable_butd:
         if args.visdial_v == '1.0':
-            assert (args.len_vis_input == 36) or (args.len_vis_input == 0)
+            assert (args.len_vis_input == 18) or (args.len_vis_input == 0)
         elif args.visdial_v == '0.9':
             if (args.len_vis_input == 100):
                 args.region_bbox_file = os.path.join(args.image_root, args.region_bbox_file)
@@ -305,7 +305,7 @@ def main():
                                                only_mask_ans=args.only_mask_ans,
                                                add_boundary=args.add_boundary)
 
-    train_dataset = IGLUDataset(args.train_batch_size, data_tokenizer, args.data_path)
+    train_dataset = IGLUDataset(args.train_batch_size, data_tokenizer, args.data_path,s2s_data)
 
     if args.world_size == 1:
         train_sampler = RandomSampler(train_dataset, replacement=False)
@@ -469,17 +469,14 @@ def main():
             for step, batch in enumerate(iter_bar):
                 batch = [t.to(device) for t in batch]
                 input_ids, segment_ids, input_mask, lm_label_ids, masked_pos, masked_weights, is_next, \
-                task_idx, vis_masked_pos, img, vis_pe = batch
+                task_idx, vis_masked_pos, img3d = batch
 
                 if args.fp16:
-                    img = img.half()
-                    vis_pe = vis_pe.half()
+                    img3d = img3d.half()
 
-                if args.enable_butd:
-                    conv_feats = img.data  # Bx100x2048
-                    vis_pe = vis_pe.data
+                conv_feats = img3d.data  # Bx100x2048
 
-                loss_tuple = model(conv_feats, vis_pe, input_ids, segment_ids,
+                loss_tuple = model(conv_feats,input_ids, segment_ids,
                                    input_mask, lm_label_ids, is_next, masked_pos=masked_pos,
                                    masked_weights=masked_weights, task_idx=task_idx,
                                    vis_masked_pos=vis_masked_pos, mask_image_regions=args.mask_image_regions,

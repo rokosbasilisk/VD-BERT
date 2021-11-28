@@ -61,6 +61,27 @@ PRETRAINED_MODEL_ARCHIVE_MAP = {
 CONFIG_NAME = 'bert_config.json'
 WEIGHTS_NAME = 'pytorch_model.bin'
 
+## gridnet
+class GridNet(nn.Module):
+    def __init__(self):
+        super(GridNet, self).__init__()
+        self.conv1 = nn.Conv3d(18,24,1)
+        self.conv2 = nn.Conv3d(24,36, 1)
+        self.conv3 = nn.Conv3d(36,48,1)
+        self.dropout = nn.Dropout(0.25)
+        self.fc = nn.Linear(52272,768*18)
+    def forward(self, x):
+        x = self.conv1(x)
+        x = F.relu(x)
+        x = self.conv2(x)
+        x = F.relu(x)
+        x = self.conv3(x)
+        x = F.relu(x)
+        x = self.dropout(x)
+        x = torch.flatten(x, 1)
+        output = self.fc(x)
+        output = output.view(-1,18,768)
+        return output
 
 def gelu(x):
     """Implementation of the gelu activation function.
@@ -218,24 +239,22 @@ class BertEmbeddings(nn.Module):
         self.LayerNorm = BertLayerNorm(config.hidden_size, eps=1e-5)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
-    def forward(self, vis_feats, vis_pe, input_ids, token_type_ids=None, position_ids=None, vis_input=True,
+    def forward(self, vis_feats, input_ids, token_type_ids=None, position_ids=None, vis_input=True,
                 len_vis_input=49):
         seq_length = input_ids.size(1)
         if position_ids is None:
             position_ids = torch.arange(seq_length, dtype=torch.long, device=input_ids.device)
-            position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
+            position_ids = position_ids.unsqueeze(0).expand_as(input_ids) # modified
         if token_type_ids is None:
             token_type_ids = torch.zeros_like(input_ids)
-
         words_embeddings = self.word_embeddings(input_ids)
         position_embeddings = self.position_embeddings(position_ids)
         if vis_input and len_vis_input != 0:
-            words_embeddings = torch.cat((words_embeddings[:, :1], vis_feats,
-                                          words_embeddings[:, len_vis_input + 1:]), dim=1)
+            words_embeddings = torch.cat((words_embeddings[:, :1], vis_feats,words_embeddings[:, len_vis_input + 1:]), dim=1)
             # assert len_vis_input == 100, 'only support region attn!'
-            position_embeddings = torch.cat((position_embeddings[:, :1], vis_pe,
-                                             position_embeddings[:, len_vis_input + 1:]), dim=1)  # hacky...
         token_type_embeddings = self.token_type_embeddings(token_type_ids)
+
+
 
         embeddings = words_embeddings + position_embeddings + token_type_embeddings
         if self.fp32_embedding:
@@ -845,13 +864,13 @@ class BertModel(PreTrainedBertModel):
         extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
         return extended_attention_mask
 
-    def forward(self, vis_feats, vis_pe, input_ids, token_type_ids=None, attention_mask=None,
+    def forward(self, vis_feats, input_ids, token_type_ids=None, attention_mask=None,
                 output_all_encoded_layers=True, len_vis_input=49):
         extended_attention_mask = self.get_extended_attention_mask(
             input_ids, token_type_ids, attention_mask)
 
         # hack to load vis feats
-        embedding_output = self.embeddings(vis_feats, vis_pe, input_ids, token_type_ids, len_vis_input=len_vis_input)
+        embedding_output = self.embeddings(vis_feats, input_ids, token_type_ids, len_vis_input=len_vis_input)
         encoded_layers = self.encoder(embedding_output,
                                       extended_attention_mask,
                                       output_all_encoded_layers=output_all_encoded_layers)
@@ -997,8 +1016,8 @@ class BertPreTrainingPairRel(nn.Module):
 class BertForPreTrainingLossMask(PreTrainedBertModel):
     """refer to BertForPreTraining"""
 
-    def __init__(self, config, num_labels=2, enable_butd=False, len_vis_input=36,
-                 visdial_v='1.0', loss_type='mlm', eval_disc=False, float_nsp_label=False,
+    def __init__(self, config, num_labels=2, enable_butd=False, len_vis_input=18,
+                 visdial_v='1.0', loss_type='mlm',float_nsp_label=False,
                  neg_num=0, adaptive_weight=False, add_attn_fuse=False,
                  no_h0=False, add_val=False, no_vision=False, rank_loss=''):
         super(BertForPreTrainingLossMask, self).__init__(config)
@@ -1011,7 +1030,6 @@ class BertForPreTrainingLossMask(PreTrainedBertModel):
         self.num_labels = num_labels
         self.len_vis_input = len_vis_input
         self.enable_butd = enable_butd
-        self.eval_disc = eval_disc
         self.loss_type = loss_type
         self.visdial_v = visdial_v
         self.float_nsp_label = float_nsp_label
@@ -1030,53 +1048,16 @@ class BertForPreTrainingLossMask(PreTrainedBertModel):
 
         self.logsoftmax = nn.LogSoftmax(dim=-1)
 
-        if enable_butd:
-            if len_vis_input == 36:
-                self.vis_embed = nn.Sequential(nn.Linear(2048, config.hidden_size),
-                                               nn.ReLU(),
-                                               nn.Dropout(config.hidden_dropout_prob))  # use to be 0.3
-                self.vis_pe_embed = nn.Sequential(nn.Linear(2, config.hidden_size), #changing the position embedding to 2
-                                                  nn.ReLU(),
-                                                  nn.Dropout(config.hidden_dropout_prob))
+        self.vis_embed = GridNet()
 
-    def forward(self, vis_feats, vis_pe, input_ids, token_type_ids=None, attention_mask=None, masked_lm_labels=None,
+    def forward(self, vis_feats,input_ids, token_type_ids=None, attention_mask=None, masked_lm_labels=None,
                 next_sentence_label=None, masked_pos=None, masked_weights=None, task_idx=None,
                 vis_masked_pos=[], mask_image_regions=False, drop_worst_ratio=0.2):
 
-        if self.no_vision:
-            vis_feats = []  # image region features
-            vis_pe = []  # image region positional encodings
-        else:
-            vis_feats = self.vis_embed(vis_feats)  # image region features
-            vis_pe = self.vis_pe_embed(vis_pe)  # image region positional encodings
+        vis_feats = self.vis_embed(vis_feats)  # image region features
 
         def gather_seq_out_by_pos(seq, pos):
             return torch.gather(seq, 1, pos.unsqueeze(2).expand(-1, -1, seq.size(-1)))
-
-        if self.eval_disc:
-            batch_size, num_options, max_seq_length = input_ids.size()
-            batch_size, num_options, max_seq_length, max_seq_length = attention_mask.size()
-
-            # [batch_size*num_options, vis_len, hidden_size]
-            if self.no_vision:
-                vis_feats = []  # image region features
-                vis_pe = []  # image region positional encodings
-            else:
-                batch_size, vis_len, hidden_size = vis_feats.size()
-                vis_feats = vis_feats.unsqueeze(1).repeat(1, num_options, 1, 1).view(-1, vis_len, hidden_size)
-                vis_pe = vis_pe.unsqueeze(1).repeat(1, num_options, 1, 1).view(-1, vis_len, hidden_size)
-
-            input_ids = input_ids.view(-1, max_seq_length)
-            token_type_ids = token_type_ids.view(-1, max_seq_length)
-            attention_mask = attention_mask.view(-1, max_seq_length, max_seq_length)
-            sequence_output, pooled_output = self.bert(vis_feats, vis_pe, input_ids, token_type_ids,
-                                                       attention_mask, output_all_encoded_layers=False,
-                                                       len_vis_input=self.len_vis_input)
-            prediction_scores, seq_relationship_score = self.cls(
-                sequence_output, pooled_output, task_idx=task_idx)
-
-            seq_relationship_score = seq_relationship_score.view(batch_size, num_options, self.num_labels)
-            return seq_relationship_score
 
         # zero out vis_masked_pos
         if mask_image_regions:
@@ -1085,11 +1066,11 @@ class BertForPreTrainingLossMask(PreTrainedBertModel):
                 for pp in range(vis_masked_pos.size(1)):
                     vis_feat_mask[bb, vis_masked_pos[bb, pp] - 1] = 1
             sequence_output, pooled_output = self.bert(vis_feats.masked_fill(vis_feat_mask, 0.),
-                                                       vis_pe.masked_fill(vis_feat_mask, 0.), input_ids, token_type_ids,
+                                                       input_ids, token_type_ids,
                                                        attention_mask, output_all_encoded_layers=False,
                                                        len_vis_input=self.len_vis_input)
         else:
-            sequence_output, pooled_output = self.bert(vis_feats, vis_pe, input_ids, token_type_ids,
+            sequence_output, pooled_output = self.bert(vis_feats, input_ids, token_type_ids,
                                                        attention_mask, output_all_encoded_layers=False,
                                                        len_vis_input=self.len_vis_input)
 

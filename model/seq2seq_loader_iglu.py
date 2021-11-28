@@ -18,11 +18,12 @@ import copy
 class IGLUDataset(torch.utils.data.Dataset):
     """ Load image-sentence pairs """
 
-    def __init__(self,batch_size, tokenizer, data_path):
+    def __init__(self,batch_size, tokenizer, data_path,s2s_data=None):
         super().__init__()
         self.tokenizer = tokenizer  # tokenize function
         self.data_path  = data_path
         self.batch_size = batch_size
+        self.s2s_data = s2s_data
         with open(self.data_path,'rb') as f:
             self.samples = pickle.load(f)
     
@@ -35,19 +36,26 @@ class IGLUDataset(torch.utils.data.Dataset):
         # loss_tuple = model(conv_feats, vis_pe, input_ids, segment_ids,input_mask, lm_label_ids, is_next, masked_pos=masked_pos,masked_weights=masked_weights, task_idx=task_idx, #
         # vis_masked_pos=vis_masked_pos, mask_image_regions=args.mask_image_regions, drop_worst_ratio=args.max_drop_worst_ratio) #
         sample = self.samples[idx]
-        prev_uttr = tokenizer.tokenize(sample['prev_utterances'])
+        prev_utt = sample['prev_utterances']
         cur_hist = []
         for utt in prev_utt:
             utt = utt['utterance']
             if type(utt) == type(list()):
-                cur_hist.append(utt[0])
+                utt = utt[0].strip("<>")
+                utt = utt.replace('_',' ')
+                cur_hist.append(utt)
             else:
                 cur_hist.append(utt)
-        cur_hist = tokenizer.tokenize(cur_hist)
-        ques_tokens = tokenizer.tokenize(cur_hist.pop()+'?')
-        ans_tokens = tokenizer.tokenize(sample['next_utterance'])
-        img3d = sample['diffs_built_config_space'][0]
-        return img3d,(cur_hist,ques_tokens,ans_tokens,1.0)
+        ques_tokens = self.tokenizer.tokenize(cur_hist[-1]+'?')
+        cur_hist = " ".join(cur_hist[:-1])
+        hist_tokens = self.tokenizer.tokenize(cur_hist)
+        ans_tokens = self.tokenizer.tokenize(sample['next_utterance'])
+        built = get_3d_repr(sample['built_config'])
+        gold = get_3d_repr(sample['gold_config'])
+        diff_ = gold-built
+        img3d = torch.cat([built,gold,diff_])
+        instance = img3d,(hist_tokens,ques_tokens,ans_tokens,1.0)
+        return self.s2s_data(instance)
 
     def __iter__(self):  # iterator to load data
         for __ in range(math.ceil(len(self.samples) / float(self.batch_size))):
@@ -84,6 +92,7 @@ class Preprocess4IGLU(Pipeline):
         self.finetune = finetune
         self.only_mask_ans = only_mask_ans
         self.add_boundary = add_boundary
+        self.float_nsp_label = float_nsp_label
 
         self.task_idx = 3  # relax projection layer for different tasks [yue: just reserve this, no effects]
         self.vis_mask_prob = vis_mask_prob
@@ -98,8 +107,8 @@ class Preprocess4IGLU(Pipeline):
                 tokens += ['[PAD]'] * (length - len(tokens))
             return tokens
 
-        assert isinstance(visdial_example, tuple)
-        hist_tokens, ques_tokens, ans_tokens, nsp_label = visdial_example
+        assert isinstance(iglu_example, tuple)
+        hist_tokens, ques_tokens, ans_tokens, nsp_label = iglu_example
         if len(ques_tokens) < self.max_len_hist_ques:
             if self.pad_hist:
                 hist_tokens = pad_to_length(hist_tokens, self.max_len_hist_ques - len(ques_tokens))
@@ -109,10 +118,10 @@ class Preprocess4IGLU(Pipeline):
             hist_tokens = []
             ques_tokens = ques_tokens[:self.max_len_hist_ques]
 
-        if self.only_qa:
-            prev_tokens = ['[SEP_0]'] + ques_tokens + ['[SEP_1]']
-        else:
-            prev_tokens = hist_tokens + ['[SEP_0]'] + ques_tokens + ['[SEP_1]']
+        #if self.only_qa:
+        #    prev_tokens = ['[SEP_0]'] + ques_tokens + ['[SEP_1]']
+        #else\n:
+        prev_tokens = hist_tokens + ['[SEP_0]'] + ques_tokens + ['[SEP_1]']
         if self.pad_hist:
             assert len(prev_tokens) == self.max_len_hist_ques + 2
         else:
@@ -154,8 +163,6 @@ class Preprocess4IGLU(Pipeline):
         input_ids.extend([0] * n_pad)
         segment_ids.extend([0] * n_pad)
 
-        img3d = get_3d_repr(img3d)
-
         if self.float_nsp_label:
             nsp_label = torch.tensor(nsp_label, dtype=torch.float32)
 
@@ -166,14 +173,13 @@ class Preprocess4IGLU(Pipeline):
         # self-attention mask
         input_mask = torch.zeros(self.max_len, self.max_len, dtype=torch.long)
 
-        if self.mode == "s2s":
-            if self.only_mask_ans:
-                input_mask[:, :self.len_vis_input + 2 + prev_tokens_len].fill_(1)
-                second_st, second_end = self.len_vis_input + 2 + prev_tokens_len, len(tokens)
-            else:
-                input_mask[:, :self.len_vis_input + 2].fill_(1)
-                second_st, second_end = self.len_vis_input + 2, len(tokens)
-            input_mask[second_st:second_end, second_st:second_end].copy_(
+        if self.only_mask_ans:
+            input_mask[:, :self.len_vis_input + 2 + prev_tokens_len].fill_(1)
+            second_st, second_end = self.len_vis_input + 2 + prev_tokens_len, len(tokens)
+        else:
+            input_mask[:, :self.len_vis_input + 2].fill_(1)
+            second_st, second_end = self.len_vis_input + 2, len(tokens)
+        input_mask[second_st:second_end, second_st:second_end].copy_(
                 self._tril_matrix[:second_end - second_st, :second_end - second_st])
 
         if self.pad_hist:
