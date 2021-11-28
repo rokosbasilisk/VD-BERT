@@ -17,9 +17,9 @@ class CwCDataset(Dataset):
 	def __init__(
 		self, model, split, lower=False, add_builder_utterances=False, compute_diff=True, compute_perspective=True,
 		augment_dataset=False, augmentation_factor=0, exactly_k=False, strict=False,
-		data_dir="../data/iglu_corpus/logs/", gold_configs_dir="../data/iglu_corpus/gold-configurations/", save_dest_dir="../data/iglu_corpus/saved_cwc_datasets", saved_dataset_dir="../data/iglu_corpus/saved_cwc_datasets/lower-no_diff/",
+		data_dir="../data/corpus/logs/", gold_configs_dir="../data/corpus/gold-configurations/", save_dest_dir="../data/corpus/saved_cwc_datasets", saved_dataset_dir="../data/corpus/saved_cwc_datasets/lower-no_diff/",
 		encoder_vocab=None, decoder_vocab=None, dump_dataset=False, load_dataset=False, transform=None, sample_filters = [],
-		add_augmented_data=False, augmented_data_fraction=0.0, aug_data_dir="../../data/augmented-no-spatial/logs/", aug_gold_configs_dir="../../data/augmented-no-spatial/gold-configurations/"
+		add_augmented_data=False, augmented_data_fraction=0.0, aug_data_dir="../../data/corpus/augmented-no-spatial/logs/", aug_gold_configs_dir="../../data/corpus/augmented-no-spatial/gold-configurations/"
 	):
 		"""
 		Instantiates a dataset
@@ -1331,8 +1331,8 @@ if __name__ == '__main__':
 	BE CAREFUL TO NOT OVERWRITE EXISTING DATASETS AS DATASETS ARE NOT VERSION CONTROLLED.
 	"""
 	parser = argparse.ArgumentParser()
-	parser.add_argument('--model', default='seq2seq_all_inputs', help='model type')
-	parser.add_argument('--split', default='val', help='dataset split')
+	parser.add_argument('--model', default='cnn_3d', help='model type') # seq2seq_all_inputs
+	parser.add_argument('--split', default='train', help='dataset split')
 
 	parser.add_argument('--dump_dataset', default=True, action='store_true', help='build the dataset')
 	parser.add_argument('--lower', default=False, action='store_true', help='lowercase the dataset')

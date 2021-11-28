@@ -640,8 +640,8 @@ if __name__ == "__main__":
 
 	parser = argparse.ArgumentParser()
 
-	parser.add_argument('--data_path', type=str, default='../data/logs/', help='path for data jsons')
-	parser.add_argument('--gold_configs_dir', type=str, default='../data/gold-configurations/', help='path for gold config xmls')
+	parser.add_argument('--data_path', type=str, default='../data/corpus/logs/', help='path for data jsons')
+	parser.add_argument('--gold_configs_dir', type=str, default='../data/corpus/gold-configurations/', help='path for gold config xmls')
 
 	parser.add_argument('--seed', type=int, default=1234, help='random seed')
 
@@ -652,5 +652,5 @@ if __name__ == "__main__":
 	get_data_splits(args)
 
 	get_augmented_data_splits(
-		"../data/augmented-no-spatial/logs/", "../data/augmented-no-spatial/gold-configurations/", "../data/logs/splits.json"
+		"../data/corpus/augmented-no-spatial/logs/", "../data/corpus/augmented-no-spatial/gold-configurations/", "../data/corpus/logs/splits.json"
 	)
