@@ -798,37 +798,6 @@ class PreTrainedBertModel(nn.Module):
 
 
 class BertModel(PreTrainedBertModel):
-    """BERT model ("Bidirectional Embedding Representations from a Transformer").
-
-    Params:
-        config: a BertConfig class instance with the configuration to build a new model
-
-    Inputs:
-        `input_ids`: a torch.LongTensor of shape [batch_size, sequence_length]
-            with the word token indices in the vocabulary(see the tokens preprocessing logic in the scripts
-            `extract_features.py`, `run_classifier.py` and `run_squad.py`)
-        `token_type_ids`: an optional torch.LongTensor of shape [batch_size, sequence_length] with the token
-            types indices selected in [0, 1]. Type 0 corresponds to a `sentence A` and type 1 corresponds to
-            a `sentence B` token (see BERT paper for more details).
-        `attention_mask`: an optional torch.LongTensor of shape [batch_size, sequence_length] with indices
-            selected in [0, 1]. It's a mask to be used if the input sequence length is smaller than the max
-            input sequence length in the current batch. It's the mask that we typically use for attention when
-            a batch has varying length sentences.
-        `output_all_encoded_layers`: boolean which controls the content of the `encoded_layers` output as described below. Default: `True`.
-
-    Outputs: Tuple of (encoded_layers, pooled_output)
-        `encoded_layers`: controled by `output_all_encoded_layers` argument:
-            - `output_all_encoded_layers=True`: outputs a list of the full sequences of encoded-hidden-states at the end
-                of each attention block (i.e. 12 full sequences for BERT-base, 24 for BERT-large), each
-                encoded-hidden-state is a torch.FloatTensor of size [batch_size, sequence_length, hidden_size],
-            - `output_all_encoded_layers=False`: outputs only the full sequence of hidden-states corresponding
-                to the last attention block of shape [batch_size, sequence_length, hidden_size],
-        `pooled_output`: a torch.FloatTensor of size [batch_size, hidden_size] which is the output of a
-            classifier pretrained on top of the hidden state associated to the first character of the
-            input (`CLF`) to train on the Next-Sentence task (see BERT's paper).
-
-    """
-
     def __init__(self, config):
         super(BertModel, self).__init__(config)
         self.embeddings = BertEmbeddings(config)
@@ -885,15 +854,15 @@ class BertModelIncr(BertModel):
     def __init__(self, config):
         super(BertModelIncr, self).__init__(config)
 
-    def forward(self, vis_feats, vis_pe, input_ids, token_type_ids, position_ids, attention_mask,
+    def forward(self, vis_feats,input_ids, token_type_ids, position_ids, attention_mask,
                 prev_embedding=None, prev_encoded_layers=None, output_all_encoded_layers=True,
                 len_vis_input=49):
         extended_attention_mask = self.get_extended_attention_mask(
             input_ids, token_type_ids, attention_mask)
 
         embedding_output = self.embeddings(
-            vis_feats, vis_pe, input_ids, token_type_ids, position_ids,
-            vis_input=(prev_encoded_layers is None), len_vis_input=len_vis_input)
+                vis_feats,input_ids, token_type_ids, 
+                position_ids,len_vis_input=len_vis_input)
         encoded_layers = self.encoder(embedding_output,
                                       extended_attention_mask,
                                       prev_embedding=prev_embedding,
@@ -1138,8 +1107,9 @@ class BertForPreTrainingLossMask(PreTrainedBertModel):
         return masked_lm_loss, vis_pretext_loss, next_sentence_loss
 
 
-""" for VD-BERT, based on UniLM """
 
+
+""" for VD-BERT, based on UniLM """
 
 class BertForVisDialGen(PreTrainedBertModel):
     """refer to BertForPreTraining"""
@@ -1169,51 +1139,19 @@ class BertForVisDialGen(PreTrainedBertModel):
         self.visdial_v = visdial_v
 
         # will not be initialized when loading BERT weights
-        if enable_butd:
-            if len_vis_input == 36:
-                self.vis_embed = nn.Sequential(nn.Linear(2048, config.hidden_size),
-                                               nn.ReLU(),
-                                               nn.Dropout(config.hidden_dropout_prob))  # use to be 0.3
-                self.vis_pe_embed = nn.Sequential(nn.Linear(7, config.hidden_size),
-                                                  nn.ReLU(),
-                                                  nn.Dropout(config.hidden_dropout_prob))
+        self.vis_embed = GridNet()
 
-    def forward(self, vis_feats, vis_pe, input_ids, token_type_ids, position_ids, attention_mask,
-                ans_ids, ans_opts_ids, task_idx=None):
+    def forward(self, vis_feats,input_ids, token_type_ids, position_ids, attention_mask,task_idx=None):
 
         vis_feats = self.vis_embed(vis_feats)  # image region features (batch_size, 100, 768)
-        vis_pe = self.vis_pe_embed(vis_pe)  # image region positional encodings (batch_size, 100, 768)
         batch_size, vis_len, hidden_size = vis_feats.size()
         input_length = input_ids.shape[-1]
         output_length = token_type_ids.shape[-1]
 
-        batch_size, num_options, max_tgt_length = ans_opts_ids.size()
-        vis_feats = vis_feats.view(batch_size, 1, vis_len, hidden_size).repeat(1, num_options, 1, 1)
-        vis_feats = vis_feats.view(-1, vis_len, hidden_size)
 
-        vis_pe = vis_pe.view(batch_size, 1, vis_len, hidden_size).repeat(1, num_options, 1, 1)
-        vis_pe = vis_pe.view(-1, vis_len, hidden_size)
-
-        input_ids = input_ids.view(batch_size, 1, input_length).repeat(1, num_options, 1)
-        input_ids = input_ids.view(batch_size * num_options, input_length)
-
-        token_type_ids = token_type_ids.view(batch_size, 1, output_length).repeat(1, num_options, 1)
-        token_type_ids = token_type_ids.view(batch_size * num_options, output_length)
-
-        position_ids = position_ids.view(batch_size, 1, output_length).repeat(1, num_options, 1)
-        position_ids = position_ids.view(batch_size * num_options, output_length)
-
-        attention_mask = attention_mask.unsqueeze(1).repeat(1, num_options, 1, 1)
-        attention_mask = attention_mask.view(batch_size * num_options, output_length, output_length)
-
-        ans_ids = ans_ids.unsqueeze(1).repeat(1, num_options, 1)
-        ans_ids = ans_ids.view(batch_size * num_options, max_tgt_length)
-
-        ans_opts_ids = ans_opts_ids.contiguous().view(batch_size * num_options, max_tgt_length)
 
         output_ids = []
         output_probs = []
-        output_scores_list = []
         prev_embedding = None
         prev_encoded_layers = None
         curr_ids = input_ids
@@ -1230,7 +1168,7 @@ class BertForVisDialGen(PreTrainedBertModel):
                                   start_pos:next_pos + 1, :next_pos + 1]
             curr_position_ids = position_ids[:, start_pos:next_pos + 1]
             new_embedding, new_encoded_layers, _ = \
-                self.bert(vis_feats, vis_pe, x_input_ids, curr_token_type_ids, curr_position_ids,
+                self.bert(vis_feats,x_input_ids, curr_token_type_ids, curr_position_ids,
                           curr_attention_mask, prev_embedding=prev_embedding,
                           prev_encoded_layers=prev_encoded_layers,
                           output_all_encoded_layers=True, len_vis_input=self.len_vis_input)
@@ -1239,20 +1177,11 @@ class BertForVisDialGen(PreTrainedBertModel):
             prediction_scores, _ = self.cls(
                 last_hidden, None, task_idx=task_idx)
 
-            cur_ans_opt_ids = ans_opts_ids[:, output_decode_step].unsqueeze(1)
+            # prediction done here 
+
             max_probs, max_ids = torch.max(prediction_scores, dim=-1)
-            prediction_scores = self.logsoftmax(prediction_scores.squeeze())
-            ans_word_scores = torch.gather(prediction_scores, -1, cur_ans_opt_ids).squeeze()
-            output_scores_list.append(ans_word_scores)
             output_ids.append(max_ids)
             output_probs.append(max_probs)
-
-            if self.decode_verbose:
-                idx = 0
-                print("Results for %d item in batch_size*num_options (%d*%d)" % (idx, batch_size, num_options))
-                print("Question: ", self.tokenizer.convert_ids_to_tokens(input_ids[idx][38:].tolist()))
-                print("Answer: ", self.tokenizer.convert_ids_to_tokens(ans_ids[idx].tolist()))
-                print("Predict: ", self.tokenizer.convert_ids_to_tokens([x[idx][0].tolist() for x in output_ids]))
 
             if prev_embedding is None:
                 prev_embedding = new_embedding[:, :-1, :]
@@ -1266,15 +1195,10 @@ class BertForVisDialGen(PreTrainedBertModel):
                 prev_encoded_layers = [torch.cat((x[0], x[1][:, :-1, :]), dim=1)
                                        for x in zip(prev_encoded_layers, new_encoded_layers)]
 
-            curr_ids = cur_ans_opt_ids  # max_ids
             next_pos += 1
             output_decode_step += 1
 
-        output_scores = torch.stack(output_scores_list, 1)
-        output_scores = torch.where(ans_opts_ids != 0, output_scores, torch.zeros_like(output_scores))
-        output_scores = torch.sum(output_scores, -1).view(batch_size, num_options)
-        return torch.cat(output_ids, dim=1), torch.cat(output_probs, dim=1), output_scores
-
+        return torch.cat(output_ids, dim=1), torch.cat(output_probs, dim=1)
 
 class BertForExtractiveSummarization(PreTrainedBertModel):
     """refer to BertForPreTraining"""

@@ -1,11 +1,8 @@
 from argparse import Namespace
 import sys
-sys.path.append('./python')
-from bleu import compute_bleu
-from train_and_eval import generate, multinomial_generate, multinomial_generate_seq2seq
-from data_loader import CwCDataset
+sys.path.append('./data_utils')
+from data_process import CwCDataset
 from utils import *
-from vocab import load_vocab
 import os
 import argparse
 import torch
@@ -14,12 +11,10 @@ import pprint
 import json
 from glob import glob
 
-# from vocab import Vocabulary
 # 1. a function named creat_dataloader
 # 2. a class Model():
 # self.init(): this function will create a model
 # self.generate(data=DataIGLU, output='output.txt'): this function will generte the predctions for test set
-
 
 #################################################
 ####   You can skip this section   #############
@@ -93,8 +88,6 @@ def create_dataloader(data_path, split):
     config_params = load_saved_config(model_path)
     gold_config_path = os.path.join(data_path, 'gold-configurations')
 
-    encoder_vocab = load_vocab('./vocabulary/encoder_vocab.pkl')
-    decoder_vocab = load_vocab('./vocabulary/decoder_vocab.pkl')
 
     test_dataset = CwCDataset(
         model=config_params["model"], split=split, lower=True, dump_dataset=False,
@@ -117,14 +110,10 @@ class Model():
     def __init__(self):
         # !!!! this function does not accept any extra input
         # you should explicitly feed your model path in your submission here
-        self.model_path = "saved_model/1626589670356"
+        self.model_path = "saved_models/model.40.0.086.bin"
         # this dict is used to store all your hyper-parameters, you can load them from a file in your submission
         self.config_params = load_saved_config(self.model_path)
         self.load_model(self.model_path)
-
-
-        self.encoder_vocab = load_vocab('./vocabulary/encoder_vocab.pkl')
-        self.decoder_vocab = load_vocab('./vocabulary/decoder_vocab.pkl')
 
         print("Model has been loaded")
 
@@ -196,7 +185,8 @@ class Model():
 def main():
     initialize_rngs(2021)
 
-    data_path = '/datadrive/uiuc_warmup/'
+    #data_path = '/datadrive/uiuc_warmup/'
+    # test with dummy data_path 
     split = 'test'
     model = Model()
 
