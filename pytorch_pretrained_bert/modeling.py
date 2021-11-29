@@ -254,8 +254,6 @@ class BertEmbeddings(nn.Module):
             # assert len_vis_input == 100, 'only support region attn!'
         token_type_embeddings = self.token_type_embeddings(token_type_ids)
 
-
-
         embeddings = words_embeddings + position_embeddings + token_type_embeddings
         if self.fp32_embedding:
             embeddings = embeddings.half()
@@ -1146,8 +1144,9 @@ class BertForVisDialGen(PreTrainedBertModel):
         vis_feats = self.vis_embed(vis_feats)  # image region features (batch_size, 100, 768)
         batch_size, vis_len, hidden_size = vis_feats.size()
         input_length = input_ids.shape[-1]
+        print(input_length)
         output_length = token_type_ids.shape[-1]
-
+        print(output_length)
 
 
         output_ids = []
@@ -1164,8 +1163,7 @@ class BertForVisDialGen(PreTrainedBertModel):
             start_pos = next_pos - curr_length
             x_input_ids = torch.cat((curr_ids, mask_ids), dim=1)
             curr_token_type_ids = token_type_ids[:, start_pos:next_pos + 1]
-            curr_attention_mask = attention_mask[:,
-                                  start_pos:next_pos + 1, :next_pos + 1]
+            curr_attention_mask = attention_mask[:,start_pos:next_pos + 1, :next_pos + 1]
             curr_position_ids = position_ids[:, start_pos:next_pos + 1]
             new_embedding, new_encoded_layers, _ = \
                 self.bert(vis_feats,x_input_ids, curr_token_type_ids, curr_position_ids,
@@ -1197,7 +1195,6 @@ class BertForVisDialGen(PreTrainedBertModel):
 
             next_pos += 1
             output_decode_step += 1
-
         return torch.cat(output_ids, dim=1), torch.cat(output_probs, dim=1)
 
 class BertForExtractiveSummarization(PreTrainedBertModel):

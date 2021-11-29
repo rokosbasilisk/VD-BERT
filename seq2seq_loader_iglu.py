@@ -294,9 +294,6 @@ class Preprocess4IGLUGen(Pipeline):
             hist_tokens = []
             ques_tokens = ques_tokens[:self.max_len_hist_ques]
 
-        #if self.only_qa:
-        #    prev_tokens = ['[SEP_0]'] + ques_tokens + ['[SEP_1]']
-        #else\n:
         prev_tokens = hist_tokens + ['[SEP_0]'] + ques_tokens + ['[SEP_1]']
         if self.pad_hist:
             assert len(prev_tokens) == self.max_len_hist_ques + 2

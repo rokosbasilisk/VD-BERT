@@ -19,7 +19,7 @@ import copy
 import time
 
 from pytorch_pretrained_bert.tokenization import BertTokenizer, WhitespaceTokenizer
-from pytorch_pretrained_bert.modeling import BertForVisDialGen
+from pytorch_pretrained_bert.modeling import BertForVisDialGen,BertForPreTrainingLossMask
 from pytorch_pretrained_bert.optimization import BertAdam, warmup_linear
 
 from loader_utils import batch_list_to_batch_tensors
@@ -196,7 +196,7 @@ def main():
 
     args.mask_image_regions = (args.vis_mask_prob > 0)  # whether to mask out image regions
 
-    device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
+    device = torch.device("cuda")
     n_gpu = torch.cuda.device_count()
 
 
@@ -251,17 +251,18 @@ def main():
     torch.cuda.empty_cache()
     #input_ids, segment_ids, position_ids,input_mask,task_idx,img3d
     test_dataloader = torch.utils.data.DataLoader(test_dataset,batch_size=1,collate_fn=batch_list_to_batch_tensors)
-    input_ids, segment_ids, position_ids,input_mask,task_idx,img3d = next(iter(test_dataloader))
-    print(input_ids)
-    print('\n')
-    print(segment_ids)
-    print('\n')
-    print(position_ids)
-    print('\n')
-    print(input_mask)
-    print('\n')
-    print(img3d)
-    predictions  = model(img3d.to(device),input_ids.to(device),segment_ids.to(device), position_ids.to(device), input_mask.to(device))
+    batch = next(iter(test_dataloader))
+    #batch.to(device)
+
+    input_ids, segment_ids, position_ids,input_mask,task_idx,img3d = batch
+    img3d = img3d.to(device)
+    input_ids = input_ids.to(device)
+    segment_ids = segment_ids.to(device)
+    position_ids = position_ids.to(device)
+    input_mask = input_mask.to(device)
+    task_idx = task_idx.to(device)
+
+    predictions  = model.forward(img3d,input_ids,segment_ids, position_ids, input_mask)
     print(predictions)
 
 

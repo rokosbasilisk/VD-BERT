@@ -14,7 +14,7 @@ model_path=./saved_models/model.100.0.253.bin
 python predict.py \
     --model_recover_path ${model_path} --len_vis_input ${len_vis_input}  \
     --do_train --new_segment_ids --enable_butd --visdial_v ${visdial_v} \
-    --data_path ./data/corpus/saved_cwc_datasets/val-samples.pkl \
+    --data_path ./data/corpus/saved_cwc_datasets/train-samples.pkl \
     --s2s_prob 1 --bi_prob 0 --loss_type ${loss_type} --max_pred 1 --neg_num 0 --multiple_neg 0 \
     --inc_full_hist 1  --max_len_hist_ques 200 --max_len_ans 10 --only_mask_ans 1 \
     --num_workers 3 --train_batch_size ${bs}  --use_num_imgs 1 \
