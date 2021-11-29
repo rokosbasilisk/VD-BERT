@@ -1140,15 +1140,10 @@ class BertForVisDialGen(PreTrainedBertModel):
         self.vis_embed = GridNet()
 
     def forward(self, vis_feats,input_ids, token_type_ids, position_ids, attention_mask,task_idx=None):
-
         vis_feats = self.vis_embed(vis_feats)  # image region features (batch_size, 100, 768)
         batch_size, vis_len, hidden_size = vis_feats.size()
         input_length = input_ids.shape[-1]
-        print(input_length)
         output_length = token_type_ids.shape[-1]
-        print(output_length)
-
-
         output_ids = []
         output_probs = []
         prev_embedding = None

@@ -132,8 +132,7 @@ class Preprocess4IGLU(Pipeline):
         tokens = ['[CLS]'] + tokens_a + ['[SEP]'] + tokens_b + ['[SEP]']
         assert len(tokens) <= self.max_len
 
-        if self.new_segment_ids:
-            segment_ids = [0] * (len(tokens_a) + 2) + [1] * (len(tokens_b) + 1)  # yue, do not new_segment_ids
+        segment_ids = [0] * (len(tokens_a) + 2) + [1] * (len(tokens_b) + 1)  # yue, do not new_segment_ids
 
         if self.only_mask_ans:
             effective_length = len(ans_tokens)
@@ -162,6 +161,7 @@ class Preprocess4IGLU(Pipeline):
         if self.float_nsp_label:
             nsp_label = torch.tensor(nsp_label, dtype=torch.float32)
 
+        print(len(segment_ids))
         return (input_ids, segment_ids, input_mask, masked_ids, masked_pos, masked_weights, nsp_label, self.task_idx,
                 vis_masked_pos, img3d)
 
@@ -342,7 +342,8 @@ class Preprocess4IGLUGen(Pipeline):
         position_ids = []
         for idx in range(self.max_len):
             position_ids.append(idx)
-
+        
+        print(len(segment_ids))
         return (input_ids, segment_ids, position_ids,input_mask,self.task_idx,img3d)
 
     def get_attn_mask(self, tokens, prev_tokens_len):

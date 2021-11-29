@@ -239,7 +239,7 @@ def main():
             type_vocab_size=type_vocab_size, relax_projection=relax_projection,
             config_path=args.config_path, task_idx=task_idx_proj,
             max_position_embeddings=args.max_position_embeddings, label_smoothing=args.label_smoothing,
-            fp32_embedding=args.fp32_embedding,
+            fp32_embedding=args.fp32_embedding,mask_word_id=mask_word_id,
             drop_prob=args.drop_prob, enable_butd=args.enable_butd,
             len_vis_input=args.len_vis_input, visdial_v=args.visdial_v
             )
