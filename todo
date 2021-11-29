@@ -1,4 +1,1 @@
-1) visdial data json structure:- questions,answers,dialogues[image-idx,question-idx,answer-idx]
-2) img, img_pe = self.hdf_reader[img_id] # image and positional encoding 
-3) (architect,builder)-pair, next_utterance + [image vectors for all previous timesteps]
-
+make a submission

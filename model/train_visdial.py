@@ -556,8 +556,9 @@ def main():
             output_model_file = os.path.join(
                 args.output_dir, "model.%d.%.3f.bin" % (i_epoch, np.mean(losses)))
             if args.global_rank in (-1, 0):  # save model if the first device or no dist
-                torch.save(copy.deepcopy(model_to_save).cpu().state_dict(), output_model_file)
-                logger.info("Save model to %s", output_model_file)
+                if (i_epoch%10==0):
+                    torch.save(copy.deepcopy(model_to_save).cpu().state_dict(), output_model_file)
+                    logger.info("Save model to %s", output_model_file)
             logger.info("Finish training epoch %d, avg loss: %.2f and takes %.2f seconds" % (
                 i_epoch, np.mean(losses), time.time() - t0))
             logger.info("***** CUDA.empty_cache() *****")

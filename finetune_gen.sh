@@ -9,7 +9,7 @@ checkpoint_output=v${visdial_v}_${loss_type}_gen
 
 WORK_DIR=./
 
-model_path=./saved_models/v1.0_from_BERT_e30.bin
+model_path=./saved_models/model.100.0.253.bin
 
 python ./model/train_visdial.py \
     --output_dir checkpoints/${checkpoint_output} \
@@ -18,7 +18,7 @@ python ./model/train_visdial.py \
     --data_path ./data/corpus/saved_cwc_datasets/train-samples.pkl \
     --s2s_prob 1 --bi_prob 0 --loss_type ${loss_type} --max_pred 1 --neg_num 0 --multiple_neg 0 \
     --inc_full_hist 1  --max_len_hist_ques 200 --max_len_ans 10 --only_mask_ans 1 \
-    --num_workers 4 --train_batch_size ${bs}  --use_num_imgs 1 --num_train_epochs 10 \
+    --num_workers 3 --train_batch_size ${bs}  --use_num_imgs 1 --num_train_epochs 40 \
     --local_rank -1 --global_rank -1 --world_size 1
 
 

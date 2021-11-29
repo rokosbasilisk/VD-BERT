@@ -93,11 +93,6 @@ def create_dataloader(data_path, split):
     config_params = load_saved_config(model_path)
     gold_config_path = os.path.join(data_path, 'gold-configurations')
 
-    # with open(config_params["encoder_vocab_path"], 'rb') as f:
-    # 		encoder_vocab = pickle.load(f)
-    # with open(config_params["decoder_vocab_path"], 'rb') as f:
-    # 		decoder_vocab = pickle.load(f)
-
     encoder_vocab = load_vocab('./vocabulary/encoder_vocab.pkl')
     decoder_vocab = load_vocab('./vocabulary/decoder_vocab.pkl')
 
@@ -123,16 +118,10 @@ class Model():
         # !!!! this function does not accept any extra input
         # you should explicitly feed your model path in your submission here
         self.model_path = "saved_model/1626589670356"
-        # self.model_path="/datadrive/model/utterances_and_block_region_counters/20210718/utterances_and_block_region_counters_trainer-1626589670355/1626589670356/"
-
         # this dict is used to store all your hyper-parameters, you can load them from a file in your submission
         self.config_params = load_saved_config(self.model_path)
         self.load_model(self.model_path)
 
-        # with open(self.config_params["encoder_vocab_path"], 'rb') as f:
-        # 	self.encoder_vocab = pickle.load(f)
-        # with open(self.config_params["decoder_vocab_path"], 'rb') as f:
-        # 	self.decoder_vocab = pickle.load(f)
 
         self.encoder_vocab = load_vocab('./vocabulary/encoder_vocab.pkl')
         self.decoder_vocab = load_vocab('./vocabulary/decoder_vocab.pkl')
@@ -201,21 +190,7 @@ class Model():
         with open(output_path, 'w') as f2:
             for dia in generated_utterances_:
                 generated_one = format(dia)['generated_utterance'][0]
-                f2.write(dia['time_stamp'] +
-                         '       @@@       ' + generated_one + '\n')
-
-        # predict_path = output_path.replace('.txt', '_pred.txt')
-        # ref_path = output_path.replace('.txt', '_ref.txt')
-        # predict_file = read_iglu_result(predict_path)
-        # ref_file = read_iglu_result(ref_path)
-        # reference_corpus, pred_corpus = build_ref_pred_pair(ref_file, predict_file)
-
-        # bleu_1_results = compute_bleu(reference_corpus, pred_corpus, max_order=1, smooth=False)
-        # bleu_2_results = compute_bleu(reference_corpus, pred_corpus, max_order=2, smooth=False)
-        # bleu_3_results = compute_bleu(reference_corpus, pred_corpus, max_order=3, smooth=False)
-        # bleu_4_results = compute_bleu(reference_corpus, pred_corpus, max_order=4, smooth=False)
-
-        # print(bleu_4_results[0])
+                f2.write(dia['time_stamp'] +'       @@@       ' + generated_one + '\n')
 
 
 def main():
