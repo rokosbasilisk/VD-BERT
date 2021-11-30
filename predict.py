@@ -18,12 +18,12 @@ import random
 import copy
 import time
 
-from pytorch_pretrained_bert.tokenization import BertTokenizer, WhitespaceTokenizer
-from pytorch_pretrained_bert.modeling import BertForVisDialGen,BertForPreTrainingLossMask
-from pytorch_pretrained_bert.optimization import BertAdam, warmup_linear
+from model_utils.tokenization import BertTokenizer, WhitespaceTokenizer
+from model_utils.modeling import BertForIGLUGen
+from model_utils.optimization import BertAdam, warmup_linear
 
 from loader_utils import batch_list_to_batch_tensors
-from seq2seq_loader_iglu import Preprocess4IGLUGen2, IGLUDataset
+from seq2seq_loader_iglu import Preprocess4IGLUGen, IGLUDataset
 
 def process_args():
     parser = argparse.ArgumentParser()
@@ -210,7 +210,7 @@ def main():
         tokenizer.max_len = args.max_position_embeddings
     data_tokenizer = WhitespaceTokenizer() if args.tokenized_input else tokenizer
     
-    s2s_data = Preprocess4IGLUGen2(
+    s2s_data = Preprocess4IGLUGen(
             vocab_words = list(tokenizer.vocab.keys()),
             indexer = tokenizer.convert_tokens_to_ids, max_len=args.max_seq_length,
             new_segment_ids=args.new_segment_ids,
@@ -234,7 +234,7 @@ def main():
 
     model_recover = torch.load(args.model_recover_path)
 
-    model = BertForVisDialGen.from_pretrained(
+    model = BertForIGLUGen.from_pretrained(
             args.bert_model, state_dict=model_recover, num_labels=cls_num_labels,
             type_vocab_size=type_vocab_size, relax_projection=relax_projection,
             config_path=args.config_path, task_idx=task_idx_proj,
@@ -250,7 +250,7 @@ def main():
 
     torch.cuda.empty_cache()
     #input_ids, segment_ids, position_ids,input_mask,task_idx,img3d
-    test_dataloader = torch.utils.data.DataLoader(test_dataset,batch_size=1,collate_fn=batch_list_to_batch_tensors)
+    test_dataloader = torch.utils.data.DataLoader(test_dataset,batch_size=2,collate_fn=batch_list_to_batch_tensors)
     batch = next(iter(test_dataloader))
     #batch.to(device)
 

@@ -11,7 +11,7 @@ WORK_DIR=./
 
 model_path=./saved_models/model.100.0.253.bin
 
-python train_visdial.py \
+python train.py \
     --output_dir checkpoints/${checkpoint_output} \
     --model_recover_path ${model_path} --len_vis_input ${len_vis_input}  \
     --do_train --new_segment_ids --enable_butd --visdial_v ${visdial_v} \
