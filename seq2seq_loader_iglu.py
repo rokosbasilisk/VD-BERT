@@ -336,7 +336,7 @@ class Preprocess4IGLUGen(Pipeline):
             nsp_label = torch.tensor(nsp_label, dtype=torch.float32)
         
         position_ids = []
-        for idx in range(self.max_len+1):
+        for idx in range(self.max_len):
             position_ids.append(idx)
         
         return (input_ids, segment_ids, position_ids,input_mask,self.task_idx,img3d)
@@ -441,7 +441,7 @@ class Preprocess4IGLUGen2(Pipeline):
         self.task_idx = 3  # relax projection layer for different tasks [yue: just reserve this, no effects]
 
     def __call__(self, instance):
-        img3d, (hist_tokens, ques_tokens_turns,_,__)= instance
+        img3d, (hist_tokens, ques_tokens,_,__)= instance
         tokens_a = ['[UNK]'] * self.len_vis_input
 
         def pad_to_length(tokens, length):
@@ -450,9 +450,7 @@ class Preprocess4IGLUGen2(Pipeline):
                 tokens += ['[PAD]'] * (length - len(tokens))
             return tokens
 
-        hist_tokens += ['[SEP_0]']
         cur_hist = copy.deepcopy(hist_tokens)
-        ques_tokens = ques_tokens_turns
         cur_hist = pad_to_length(cur_hist, self.max_len_hist_ques - len(ques_tokens))
 
         prev_tokens = cur_hist + ['[SEP_0]'] + ques_tokens + ['[SEP_1]']
@@ -461,7 +459,7 @@ class Preprocess4IGLUGen2(Pipeline):
         tokens_b = pad_to_length(prev_tokens, self.max_len_hist_ques + 2)
 
         tokens = ['[CLS]'] + tokens_a + ['[SEP]'] + tokens_b
-        segment_ids = [0] * (len(tokens_a) + 2) + [1] * (self.max_len_hist_ques + 2 + self.max_len_ans)
+        segment_ids = [0] * (len(tokens_a) + 2) + [1] * (self.max_len_hist_ques + 2 + self.max_len_ans+1)
         input_ids = self.indexer(tokens)
 
         input_mask = torch.zeros(self.max_len, self.max_len, dtype=torch.long)
@@ -485,7 +483,6 @@ class Preprocess4IGLUGen2(Pipeline):
                 position_ids.append(shift_idx)
             else:
                 position_ids.append(0)
-
 
         return (input_ids, segment_ids, position_ids,input_mask, self.task_idx, img3d)
 
