@@ -343,7 +343,6 @@ class Preprocess4IGLUGen(Pipeline):
         for idx in range(self.max_len):
             position_ids.append(idx)
         
-        print(len(segment_ids))
         return (input_ids, segment_ids, position_ids,input_mask,self.task_idx,img3d)
 
     def get_attn_mask(self, tokens, prev_tokens_len):
@@ -421,3 +420,123 @@ class Preprocess4IGLUGen(Pipeline):
             "[masked] id: %d, pos: %d, weights: %d" % (len(masked_ids), len(masked_pos), len(masked_weights))
 
         return input_ids, masked_ids, masked_pos, masked_weights
+
+class IGLUGen2(Pipeline):
+    """ Pre-processing steps for pretraining transformer """
+
+    def __init__(self, vocab_words, indexer, max_len=512, new_segment_ids=False,
+                 truncate_config={}, mode="s2s",
+                 region_bbox_file='', region_det_file_prefix='', image_features_hdfpath='', visdial_v='1.0',
+                 pad_hist=False, inc_full_hist=False):
+        super().__init__()
+        self.max_len = max_len
+        self.vocab_words = vocab_words  # vocabulary (sub)words
+        self.indexer = indexer  # function from token to token index
+        self.max_len = max_len
+        self._tril_matrix = torch.tril(torch.ones(
+            (max_len, max_len), dtype=torch.long))
+        self.new_segment_ids = new_segment_ids
+
+        self.len_vis_input = truncate_config.get('len_vis_input', None)
+        self.max_len_hist_ques = truncate_config.get('max_len_hist_ques', None)
+        self.max_len_ans = truncate_config.get('max_len_ans', None)
+
+        self.mode = mode
+        self.visdial_v = visdial_v
+        self.pad_hist = pad_hist
+        self.inc_full_hist = inc_full_hist
+        self.len_vis_input == 18:
+        self.task_idx = 3  # relax projection layer for different tasks [yue: just reserve this, no effects]
+
+    def __call__(self, instance):
+        img_path, cap_tokens, ques_tokens_turns, ans_tokens_turns, ans_opts_tokens_turns = instance
+        tokens_a = ['[UNK]'] * self.len_vis_input
+
+        def pad_to_length(tokens, length):
+            tokens = tokens[:length]
+            if len(tokens) < length:
+                tokens += ['[PAD]'] * (length - len(tokens))
+            return tokens
+
+        input_ids_turn = []
+        segment_ids_turn = []
+        input_mask_turn = []
+        position_ids_turn = []
+        ans_ids_turn = []
+        ans_opts_ids_turn = []
+        turn_num = len(ques_tokens_turns)
+        for turn_i in range(turn_num):
+            if turn_i == 0:
+                hist_tokens = cap_tokens[:20]
+            else:
+                prev_ans = ans_tokens_turns[turn_i - 1][:8]
+                prev_ques = ques_tokens_turns[turn_i - 1][:20 - len(prev_ans)]
+                if self.inc_full_hist:
+                    hist_tokens += ['[SEP_0]'] + prev_ques + prev_ans
+                else:
+                    hist_tokens = prev_ques + prev_ans
+            cur_hist = copy.deepcopy(hist_tokens)
+
+            ques_tokens = ques_tokens_turns[turn_i]
+
+            if len(ques_tokens) < self.max_len_hist_ques:
+                if self.pad_hist:
+                    cur_hist = pad_to_length(cur_hist, self.max_len_hist_ques - len(ques_tokens))
+                else:
+                    cur_hist = cur_hist[:self.max_len_hist_ques - len(ques_tokens)]
+            else:
+                cur_hist = []
+                ques_tokens = ques_tokens[:self.max_len_hist_ques]
+
+            prev_tokens = cur_hist + ['[SEP_0]'] + ques_tokens + ['[SEP_1]']
+
+            assert not self.pad_hist and len(prev_tokens) <= self.max_len_hist_ques + 2
+
+            tokens_b = pad_to_length(prev_tokens, self.max_len_hist_ques + 2)
+
+            # Add Special Tokens
+            tokens = ['[CLS]'] + tokens_a + ['[SEP]'] + tokens_b
+            assert len(tokens) == self.max_len - self.max_len_ans
+
+            assert self.mode == 's2s'
+            segment_ids = [0] * (len(tokens_a) + 2) + [1] * (self.max_len_hist_ques + 2 + self.max_len_ans)
+            input_ids = self.indexer(tokens)
+
+            input_mask = torch.zeros(self.max_len, self.max_len, dtype=torch.long)
+            input_mask[:, :self.len_vis_input + 2 + self.max_len_hist_ques + 2].fill_(1)
+            second_st, second_end = self.len_vis_input + 2 + self.max_len_hist_ques + 2, self.max_len
+            input_mask[second_st:second_end, second_st:second_end].copy_(
+                self._tril_matrix[:second_end - second_st, :second_end - second_st])
+
+            padded_pos = [id for id, t in enumerate(tokens) if t == '[PAD]']
+            if len(padded_pos) > 0:
+                assert len(padded_pos) == padded_pos[-1] - padded_pos[0] + 1
+                input_mask[:, padded_pos[0]:padded_pos[-1] + 1].fill_(0)
+
+            # Need to align them for decoding, use position ids to identify
+            position_ids = []
+            for idx in range(self.max_len):
+                if idx < self.len_vis_input + 2 + len(prev_tokens):
+                    position_ids.append(idx)
+                elif idx >= self.len_vis_input + 2 + self.max_len_hist_ques + 2:
+                    shift_idx = idx - (self.max_len_hist_ques + 2 - len(prev_tokens))
+                    position_ids.append(shift_idx)
+                else:
+                    position_ids.append(0)
+
+            ans_ids = self.indexer(pad_to_length(ans_tokens_turns[turn_i], self.max_len_ans))
+            ans_opts_ids = [self.indexer(pad_to_length(ans_opt, self.max_len_ans))
+                            for ans_opt in ans_opts_tokens_turns[turn_i]]
+            # only input_ids are shorter than others
+            input_ids_turn.append(input_ids)
+            segment_ids_turn.append(segment_ids)
+            input_mask_turn.append(input_mask)
+            position_ids_turn.append(position_ids)
+            ans_ids_turn.append(ans_ids)
+            ans_opts_ids_turn.append(ans_opts_ids)
+
+        img, vis_pe = self.get_butd(img_path)
+        input_mask_turn = torch.stack(input_mask_turn)
+        return (input_ids_turn, segment_ids_turn, position_ids_turn, ans_ids_turn, ans_opts_ids_turn,
+                input_mask_turn, self.task_idx, img, vis_pe)
+

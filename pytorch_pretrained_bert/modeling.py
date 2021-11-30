@@ -39,6 +39,7 @@ from torch import nn
 from torch.nn import CrossEntropyLoss, MSELoss
 import torch.nn.functional as F
 
+from more_itertools import split_after
 from .file_utils import cached_path
 from .loss import LabelSmoothingLoss
 from torch.nn.utils.rnn import pad_sequence
@@ -1144,6 +1145,24 @@ class BertForVisDialGen(PreTrainedBertModel):
         batch_size, vis_len, hidden_size = vis_feats.size()
         input_length = input_ids.shape[-1]
         output_length = token_type_ids.shape[-1]
+        num_options = 1
+        batch_size,max_tgt_length = token_type_ids.size()
+        
+        vis_feats = vis_feats.view(batch_size, 1, vis_len, hidden_size).repeat(1, num_options, 1, 1)
+        vis_feats = vis_feats.view(-1, vis_len, 768)
+
+        input_ids = input_ids.view(batch_size, 1, input_length).repeat(1, num_options, 1)
+        input_ids = input_ids.view(batch_size * num_options, input_length)
+
+        token_type_ids = token_type_ids.view(batch_size, 1, output_length).repeat(1, num_options, 1)
+        token_type_ids = token_type_ids.view(batch_size * num_options, output_length)
+
+        position_ids = position_ids.view(batch_size, 1, output_length).repeat(1, num_options, 1)
+        position_ids = position_ids.view(batch_size * num_options, output_length)
+
+        attention_mask = attention_mask.unsqueeze(1).repeat(1, num_options, 1, 1)
+        attention_mask = attention_mask.view(batch_size * num_options, output_length, output_length)        
+        
         output_ids = []
         output_probs = []
         prev_embedding = None
@@ -1663,4 +1682,5 @@ class BertForQuestionAnswering(PreTrainedBertModel):
             return total_loss
         else:
             return start_logits, end_logits
+
 
