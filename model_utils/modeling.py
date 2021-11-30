@@ -1113,7 +1113,6 @@ class BertForIGLUGen(PreTrainedBertModel):
                           curr_attention_mask, prev_embedding=prev_embedding,
                           prev_encoded_layers=prev_encoded_layers,
                           output_all_encoded_layers=True, len_vis_input=self.len_vis_input)
-            
             last_hidden = new_encoded_layers[-1][:, -1:, :]
             prediction_scores, _ = self.cls(
                 last_hidden, None, task_idx=task_idx)
