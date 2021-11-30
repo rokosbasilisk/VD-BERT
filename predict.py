@@ -23,7 +23,7 @@ from pytorch_pretrained_bert.modeling import BertForVisDialGen,BertForPreTrainin
 from pytorch_pretrained_bert.optimization import BertAdam, warmup_linear
 
 from loader_utils import batch_list_to_batch_tensors
-from seq2seq_loader_iglu import Preprocess4IGLUGen, IGLUDataset
+from seq2seq_loader_iglu import Preprocess4IGLUGen2, IGLUDataset
 
 def process_args():
     parser = argparse.ArgumentParser()
@@ -210,14 +210,14 @@ def main():
         tokenizer.max_len = args.max_position_embeddings
     data_tokenizer = WhitespaceTokenizer() if args.tokenized_input else tokenizer
     
-    s2s_data = Preprocess4IGLUGen(args.max_pred, args.mask_prob,
-            list(tokenizer.vocab.keys()),
-            tokenizer.convert_tokens_to_ids, args.max_seq_length,
+    s2s_data = Preprocess4IGLUGen2(
+            vocab_words = list(tokenizer.vocab.keys()),
+            indexer = tokenizer.convert_tokens_to_ids, max_len=args.max_seq_length,
             new_segment_ids=args.new_segment_ids,
             truncate_config={'len_vis_input': args.len_vis_input,
                              'max_len_hist_ques': args.max_len_hist_ques,
                              'max_len_ans': args.max_len_ans},
-            mode="s2s",pad_hist=args.pad_hist)
+            mode="s2s",pad_hist=args.pad_hist,inc_full_hist = True)
 
 
     test_dataset = IGLUDataset(args.train_batch_size, data_tokenizer, args.data_path,s2s_data)
