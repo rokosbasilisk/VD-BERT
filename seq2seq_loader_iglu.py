@@ -18,12 +18,13 @@ import copy
 class IGLUDataset(torch.utils.data.Dataset):
     """ Load image-sentence pairs """
 
-    def __init__(self,batch_size, tokenizer, data_path,s2s_data=None):
+    def __init__(self,batch_size, tokenizer, data_path,s2s_data=None,is_test=False):
         super().__init__()
         self.tokenizer = tokenizer  # tokenize function
         self.data_path  = data_path
         self.batch_size = batch_size
         self.s2s_data = s2s_data
+        self.is_test = is_test
         with open(self.data_path,'rb') as f:
             self.samples = pickle.load(f)
     
@@ -45,12 +46,16 @@ class IGLUDataset(torch.utils.data.Dataset):
         ques_tokens = self.tokenizer.tokenize(cur_hist[-1]+'?')
         cur_hist = " ".join(cur_hist[:-1])
         hist_tokens = self.tokenizer.tokenize(cur_hist)
-        ans_tokens = self.tokenizer.tokenize(sample['next_utterance'])
+        if self.is_test == False:
+            ans_tokens = self.tokenizer.tokenize(sample['next_utterance'])
         built = get_3d_repr(sample['built_config'])
         gold = get_3d_repr(sample['gold_config'])
         diff_ = gold-built
         img3d = torch.cat([built,gold,diff_])
-        instance = img3d,(hist_tokens,ques_tokens,ans_tokens,1.0)
+        if self.is_test == False:
+            instance = img3d,(hist_tokens,ques_tokens,ans_tokens,1.0)
+        else:
+            instance = img3d,(hist_tokens,ques_tokens)
         return self.s2s_data(instance)
 
     def __iter__(self):  # iterator to load data
@@ -262,7 +267,8 @@ class Preprocess4IGLUGen(Pipeline):
         self.task_idx = 3  # relax projection layer for different tasks [yue: just reserve this, no effects]
 
     def __call__(self, instance):
-        img3d, (hist_tokens, ques_tokens,_,__)= instance
+        img3d, (cur_hist, ques_tokens)= instance
+        cur_hist = cur_hist[:20]
         tokens_a = ['[UNK]'] * self.len_vis_input
 
         def pad_to_length(tokens, length):
@@ -271,7 +277,6 @@ class Preprocess4IGLUGen(Pipeline):
                 tokens += ['[PAD]'] * (length - len(tokens))
             return tokens
 
-        cur_hist = copy.deepcopy(hist_tokens)
         cur_hist = pad_to_length(cur_hist, self.max_len_hist_ques - len(ques_tokens))
 
         prev_tokens = cur_hist + ['[SEP_0]'] + ques_tokens + ['[SEP_1]']

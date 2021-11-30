@@ -915,7 +915,7 @@ class BertForIGLUTrain(PreTrainedBertModel):
                  visdial_v='1.0', loss_type='mlm',float_nsp_label=False,
                  neg_num=0, adaptive_weight=False, add_attn_fuse=False,
                  no_h0=False, add_val=False, no_vision=False, rank_loss=''):
-        super(BertForPreTrainingLossMask, self).__init__(config)
+        super(BertForIGLUTrain, self).__init__(config)
         self.bert = BertModel(config)
         self.cls = BertPreTrainingHeads(
             config, self.bert.embeddings.word_embeddings.weight,
@@ -953,6 +953,9 @@ class BertForIGLUTrain(PreTrainedBertModel):
 
         def gather_seq_out_by_pos(seq, pos):
             return torch.gather(seq, 1, pos.unsqueeze(2).expand(-1, -1, seq.size(-1)))
+        print(input_ids.shape)
+        print(token_type_ids.shape)
+        print(attention_mask.shape)
 
         # zero out vis_masked_pos
         if mask_image_regions:
@@ -1032,9 +1035,6 @@ class BertForIGLUTrain(PreTrainedBertModel):
 
         return masked_lm_loss, vis_pretext_loss, next_sentence_loss
 
-
-
-
 """ for VD-BERT, based on UniLM """
 
 class BertForIGLUGen(PreTrainedBertModel):
@@ -1068,7 +1068,6 @@ class BertForIGLUGen(PreTrainedBertModel):
         self.vis_embed = GridNet()
 
     def forward(self, vis_feats,input_ids, token_type_ids, position_ids, attention_mask,task_idx=None):
-         
         vis_feats = self.vis_embed(vis_feats)  # image region features (batch_size, 100, 768)
         batch_size, vis_len, hidden_size = vis_feats.size()
         input_length = input_ids.shape[-1]
@@ -1086,10 +1085,10 @@ class BertForIGLUGen(PreTrainedBertModel):
         token_type_ids = token_type_ids.view(batch_size * num_options, output_length)
 
         position_ids = position_ids.view(batch_size, 1, output_length)
-        position_ids = position_ids.view(batch_size * num_options,output_length)
+        position_ids = position_ids.view(batch_size, output_length)
 
         attention_mask = attention_mask.unsqueeze(1)
-        attention_mask = attention_mask.view(batch_size * num_options,output_length,output_length)
+        attention_mask = attention_mask.view(batch_size, output_length,output_length)
 
         
         output_ids = []
@@ -1107,26 +1106,17 @@ class BertForIGLUGen(PreTrainedBertModel):
             x_input_ids = torch.cat((curr_ids, mask_ids), dim=1)
             curr_token_type_ids = token_type_ids[:, start_pos:next_pos + 1]
             curr_attention_mask = attention_mask[:,start_pos:next_pos + 1, :next_pos + 1]
-            curr_position_ids = position_ids[:, start_pos:next_pos + 1]
-            
-            if curr_attention_mask.shape[-1]> x_input_ids.shape[-1]:
-                curr_attention_mask = curr_attention_mask[:,:,:x_input_ids.shape[-1]]
-                 
+            curr_position_ids = position_ids[:, start_pos:next_pos + 1] 
             
             new_embedding, new_encoded_layers, _ = \
                 self.bert(vis_feats,x_input_ids, curr_token_type_ids, curr_position_ids,
                           curr_attention_mask, prev_embedding=prev_embedding,
                           prev_encoded_layers=prev_encoded_layers,
                           output_all_encoded_layers=True, len_vis_input=self.len_vis_input)
-            try:
-                print(prev_embedding.shape)
-            except:
-                pass
+            
             last_hidden = new_encoded_layers[-1][:, -1:, :]
             prediction_scores, _ = self.cls(
                 last_hidden, None, task_idx=task_idx)
-
-            # prediction done here 
 
             max_probs, max_ids = torch.max(prediction_scores, dim=-1)
             output_ids.append(max_ids)
@@ -1134,12 +1124,15 @@ class BertForIGLUGen(PreTrainedBertModel):
 
             if prev_embedding is None:
                 prev_embedding = new_embedding[:, :-1, :]
+
             else:
                 prev_embedding = torch.cat(
                     (prev_embedding, new_embedding[:, :-1, :]), dim=1)
+
             if prev_encoded_layers is None:
                 prev_encoded_layers = [x[:, :-1, :]
                                        for x in new_encoded_layers]
+
             else:
                 prev_encoded_layers = [torch.cat((x[0], x[1][:, :-1, :]), dim=1)
                                        for x in zip(prev_encoded_layers, new_encoded_layers)]

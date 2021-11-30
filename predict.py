@@ -220,7 +220,7 @@ def main():
             mode="s2s",pad_hist=args.pad_hist,inc_full_hist = True)
 
 
-    test_dataset = IGLUDataset(args.train_batch_size, data_tokenizer, args.data_path,s2s_data)
+    test_dataset = IGLUDataset(args.train_batch_size, data_tokenizer, args.data_path,s2s_data,is_test = True)
 
 
 
@@ -250,7 +250,7 @@ def main():
 
     torch.cuda.empty_cache()
     #input_ids, segment_ids, position_ids,input_mask,task_idx,img3d
-    test_dataloader = torch.utils.data.DataLoader(test_dataset,batch_size=2,collate_fn=batch_list_to_batch_tensors)
+    test_dataloader = torch.utils.data.DataLoader(test_dataset,batch_size=3,collate_fn=batch_list_to_batch_tensors)
     batch = next(iter(test_dataloader))
     #batch.to(device)
 

@@ -9,7 +9,7 @@ checkpoint_output=v${visdial_v}_${loss_type}_gen
 
 WORK_DIR=./
 
-model_path=./saved_models/model.100.0.253.bin
+model_path=./saved_models/model_40.bin
 
 python train.py \
     --output_dir checkpoints/${checkpoint_output} \
